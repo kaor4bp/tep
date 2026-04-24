@@ -37,6 +37,7 @@ small; implementation can add optional fields if they preserve these semantics.
   "artifact_ref": "ART-*|null",
   "project_refs": ["PRJ-*"],
   "workspace_ref": "WSP-*",
+  "workspace_refs": ["WSP-*"],
   "captured_at": "iso8601"
 }
 ```
@@ -170,6 +171,7 @@ A command result can support a claim only after a `SRC-*` cites the relevant
   "relation": null,
   "scope": {
     "workspace_ref": "WSP-*",
+    "workspace_refs": ["WSP-*"],
     "project_refs": ["PRJ-*"],
     "task_refs": ["TASK-*"]
   },
@@ -204,9 +206,17 @@ Relation claims are normal `CLM-*` records with `claim_form=relation`.
   "claim_form": "relation",
   "statement": "PRJ-B retry strategy applies to PRJ-A queue worker.",
   "relation": {
-    "type": "supports|contradicts|refines|applies_to|analogous_to|differs_from|implements_pattern|depends_on|deduced_from|induced_from|abduced_from|assumed_from|possible_relation_between|analogized_from|challenges_freshness",
+    "type": "supports|contradicts|refines|applies_to_scope|analogous_to|differs_from|implements_pattern|depends_on|deduced_from|induced_from|abduced_from|assumed_from|possible_relation_between|analogized_from|challenges_freshness",
     "subject": "CLM-*",
-    "object": "CLM-*"
+    "object": "CLM-*",
+    "bridge_scope": "general|task|object_sync|null",
+    "task_refs": ["TASK-*"],
+    "synced_object": {
+      "kind": "field|api_route|schema|artifact|contract|object|unknown",
+      "from": "...",
+      "to": "..."
+    },
+    "bridge_limits": {"max_depth": 1}
   },
   "source_refs": ["SRC-*"],
   "semantic_hash": "sha256:..."
@@ -220,6 +230,17 @@ For exact dedup, relation claims use a canonical key over relation type,
 subject, object, directionality, and effective scope. Repeated bridge relations
 should reuse the existing relation unless the agent supplies a real
 `distinction_reason`.
+
+Bridge relation scope:
+
+- `general`: applicability exists, but project domains are not merged.
+- `task`: applicability is limited to listed `TASK-*` records.
+- `object_sync`: applicability is limited to a concrete synchronized object,
+  field, route, schema, artifact, or contract.
+
+Runtime must expose this bridge context in lookup and gate output so the agent
+can see whether it has a broad analogy, a task-specific bridge, or a concrete
+sync edge.
 
 Relation claims are created by typed runtime operations such as `link_claims`,
 usually at agent or user request. Runtime may suggest candidate relations from

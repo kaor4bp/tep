@@ -13,6 +13,7 @@ from .crypto import AgentIdentity
 from .errors import NotFoundError, ValidationError
 from .ids import new_id
 from .jsoncanon import bytes_hash, canonical_dumps, canonical_hash, loads_no_duplicates, read_json
+from .transactions import FileTransaction
 
 
 def utc_now() -> str:
@@ -48,16 +49,21 @@ class TEPHome:
         for path in [
             self.root / "registry" / "projects",
             self.root / "registry" / "workspaces",
+            self.root / "records" / "src",
+            self.root / "records" / "clm",
         ]:
             path.mkdir(parents=True, exist_ok=True)
+        (self.root / "records" / "src" / "source_events.jsonl").touch(exist_ok=True)
+
+    def begin_transaction(self, operation: str) -> FileTransaction:
+        self.ensure()
+        return FileTransaction(self.root, operation)
 
     def ensure_workspace(self, workspace_ref: str) -> Path:
         self.ensure()
         workspace = self.workspace_dir(workspace_ref)
         for path in [
             workspace / "memberships",
-            workspace / "records" / "src",
-            workspace / "records" / "clm",
             workspace / "records" / "inp",
             workspace / "records" / "run",
             workspace / "tasks",
@@ -67,14 +73,22 @@ class TEPHome:
             workspace / "artifacts",
         ]:
             path.mkdir(parents=True, exist_ok=True)
-        source_events = workspace / "records" / "src" / "source_events.jsonl"
-        source_events.touch(exist_ok=True)
         return workspace
 
     def workspace_dir(self, workspace_ref: str) -> Path:
         return self.root / "workspaces" / workspace_ref
 
-    def create_workspace(self, name: str) -> dict[str, Any]:
+    def records_dir(self) -> Path:
+        return self.root / "records"
+
+    def _record_path(self, directory: str, record_ref: str) -> Path:
+        parts = record_ref.split("-")
+        day = parts[1] if len(parts) >= 3 and len(parts[1]) == 8 else "undated"
+        year = day[:4] if day != "undated" else "undated"
+        month = day[4:6] if day != "undated" else "00"
+        return self.records_dir() / directory / year / month / f"{record_ref}.json"
+
+    def create_workspace(self, name: str, *, tx: FileTransaction | None = None) -> dict[str, Any]:
         workspace_ref = new_id("WSP")
         record = {
             "id": workspace_ref,
@@ -85,22 +99,33 @@ class TEPHome:
             "updated_at": utc_now(),
         }
         self.ensure_workspace(workspace_ref)
-        self._write_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json", record)
+        owns_tx = tx is None
+        tx = tx or self.begin_transaction("create_workspace")
+        self._write_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json", record, tx=tx)
+        if owns_tx:
+            self._commit_transaction(tx, "create_workspace", refs={"workspace_ref": workspace_ref})
         return record
 
     def read_workspace(self, workspace_ref: str) -> dict[str, Any]:
         return read_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json")
 
-    def update_workspace(self, workspace_ref: str, record: dict[str, Any]) -> dict[str, Any]:
+    def update_workspace(self, workspace_ref: str, record: dict[str, Any], *, tx: FileTransaction | None = None) -> dict[str, Any]:
         record["updated_at"] = utc_now()
-        self._write_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json", record)
+        owns_tx = tx is None
+        tx = tx or self.begin_transaction("update_workspace")
+        self._write_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json", record, tx=tx)
+        if owns_tx:
+            self._commit_transaction(tx, "update_workspace", refs={"workspace_ref": workspace_ref})
         return record
 
     def archive_workspace(self, workspace_ref: str, *, reason: str) -> dict[str, Any]:
         workspace = self.read_workspace(workspace_ref)
         workspace["status"] = "archived"
         workspace["archive_reason"] = reason
-        return self.update_workspace(workspace_ref, workspace)
+        tx = self.begin_transaction("archive_workspace")
+        result = self.update_workspace(workspace_ref, workspace, tx=tx)
+        self._commit_transaction(tx, "archive_workspace", refs={"workspace_ref": workspace_ref})
+        return result
 
     def register_project(
         self,
@@ -109,6 +134,9 @@ class TEPHome:
         roots: list[str] | None = None,
         aliases: list[str] | None = None,
         status: str = "active",
+        project_type: str = "repo",
+        parent_project_refs: list[str] | None = None,
+        tx: FileTransaction | None = None,
     ) -> dict[str, Any]:
         self.ensure()
         normalized_roots = [str(Path(root).expanduser().resolve()) for root in roots or []]
@@ -116,18 +144,26 @@ class TEPHome:
             existing = self.find_project_by_root(root)
             if existing is not None and existing.get("status") != "archived":
                 raise ValidationError(f"duplicate_project:{existing['id']}")
+        for parent_ref in parent_project_refs or []:
+            self.read_project(parent_ref)
         project_ref = new_id("PRJ")
         record = {
             "id": project_ref,
             "record_type": "project",
+            "project_type": project_type,
             "name": name,
             "roots": normalized_roots,
             "aliases": aliases or [],
+            "parent_project_refs": parent_project_refs or [],
             "status": status,
             "created_at": utc_now(),
             "updated_at": utc_now(),
         }
-        self._write_json(self.project_path(project_ref), record)
+        owns_tx = tx is None
+        tx = tx or self.begin_transaction("register_project")
+        self._write_json(self.project_path(project_ref), record, tx=tx)
+        if owns_tx:
+            self._commit_transaction(tx, "register_project", refs={"project_ref": project_ref})
         return record
 
     def projects(self) -> list[dict[str, Any]]:
@@ -152,16 +188,23 @@ class TEPHome:
     def project_path(self, project_ref: str) -> Path:
         return self.root / "registry" / "projects" / f"{project_ref}.json"
 
-    def update_project(self, project_ref: str, record: dict[str, Any]) -> dict[str, Any]:
+    def update_project(self, project_ref: str, record: dict[str, Any], *, tx: FileTransaction | None = None) -> dict[str, Any]:
         record["updated_at"] = utc_now()
-        self._write_json(self.project_path(project_ref), record)
+        owns_tx = tx is None
+        tx = tx or self.begin_transaction("update_project")
+        self._write_json(self.project_path(project_ref), record, tx=tx)
+        if owns_tx:
+            self._commit_transaction(tx, "update_project", refs={"project_ref": project_ref})
         return record
 
     def archive_project(self, project_ref: str, *, reason: str) -> dict[str, Any]:
         project = self.read_project(project_ref)
         project["status"] = "archived"
         project["archive_reason"] = reason
-        return self.update_project(project_ref, project)
+        tx = self.begin_transaction("archive_project")
+        result = self.update_project(project_ref, project, tx=tx)
+        self._commit_transaction(tx, "archive_project", refs={"project_ref": project_ref})
+        return result
 
     def project_registry_search(self, query: str | None = None) -> list[dict[str, Any]]:
         self.ensure()
@@ -182,6 +225,7 @@ class TEPHome:
         role: str,
         reason: str,
         active: bool = True,
+        include_children: bool = False,
     ) -> dict[str, Any]:
         self.read_project(project_ref)
         self.ensure_workspace(workspace_ref)
@@ -190,6 +234,7 @@ class TEPHome:
             "role": role,
             "reason": reason,
             "active": active,
+            "include_children": include_children,
             "added_at": utc_now(),
         }
         self.append_jsonl(self.memberships_path(workspace_ref), row)
@@ -203,6 +248,31 @@ class TEPHome:
         if active_only:
             rows = [row for row in rows if row.get("active") is True]
         return rows
+
+    def child_project_refs(self, project_ref: str) -> list[str]:
+        return [project["id"] for project in self.projects() if project_ref in project.get("parent_project_refs", [])]
+
+    def visible_project_refs(self, workspace_ref: str) -> set[str]:
+        return set(self.project_roles_for_workspace(workspace_ref))
+
+    def project_roles_for_workspace(self, workspace_ref: str) -> dict[str, str]:
+        visible: set[str] = set()
+        roles: dict[str, str] = {}
+        queue: list[str] = []
+        for row in self.project_memberships(workspace_ref):
+            project_ref = row["project_ref"]
+            visible.add(project_ref)
+            roles[project_ref] = row["role"]
+            if row.get("include_children") is True:
+                queue.append(project_ref)
+        while queue:
+            current = queue.pop(0)
+            for child_ref in self.child_project_refs(current):
+                if child_ref not in visible:
+                    visible.add(child_ref)
+                    roles[child_ref] = roles[current]
+                    queue.append(child_ref)
+        return roles
 
     def create_agent(self, workspace_ref: str, identity: AgentIdentity, *, thread_ref: str) -> dict[str, Any]:
         workspace = self.ensure_workspace(workspace_ref)
@@ -348,6 +418,7 @@ class TEPHome:
             "artifact_ref": None,
             "project_refs": project_refs or [],
             "workspace_ref": workspace_ref,
+            "workspace_refs": [workspace_ref],
             "captured_at": utc_now(),
         }
         self._write_json(self.source_path(workspace_ref, source_ref), record)
@@ -362,13 +433,25 @@ class TEPHome:
         return record
 
     def read_source(self, workspace_ref: str, source_ref: str) -> dict[str, Any]:
-        return read_json(self.source_path(workspace_ref, source_ref))
+        path = self.source_path(workspace_ref, source_ref)
+        if path.exists():
+            return read_json(path)
+        legacy = self._legacy_source_path(workspace_ref, source_ref)
+        if legacy.exists():
+            return read_json(legacy)
+        return read_json(path)
 
     def source_path(self, workspace_ref: str, source_ref: str) -> Path:
+        return self._record_path("src", source_ref)
+
+    def _legacy_source_path(self, workspace_ref: str, source_ref: str) -> Path:
         return self.workspace_dir(workspace_ref) / "records" / "src" / f"{source_ref}.json"
 
     def source_events_path(self, workspace_ref: str) -> Path:
-        return self.workspace_dir(workspace_ref) / "records" / "src" / "source_events.jsonl"
+        legacy = self.workspace_dir(workspace_ref) / "records" / "src" / "source_events.jsonl"
+        if legacy.exists() and legacy.stat().st_size > 0:
+            return legacy
+        return self.records_dir() / "src" / "source_events.jsonl"
 
     def source_events(self, workspace_ref: str) -> list[dict[str, Any]]:
         return self.read_jsonl(self.source_events_path(workspace_ref))
@@ -380,10 +463,11 @@ class TEPHome:
         return None
 
     def sources(self, workspace_ref: str) -> list[dict[str, Any]]:
-        source_dir = self.workspace_dir(workspace_ref) / "records" / "src"
-        if not source_dir.exists():
-            return []
-        return [read_json(path) for path in sorted(source_dir.glob("SRC-*.json"))]
+        records = [read_json(path) for path in sorted((self.records_dir() / "src").glob("**/SRC-*.json"))]
+        legacy_dir = self.workspace_dir(workspace_ref) / "records" / "src"
+        if legacy_dir.exists():
+            records.extend(read_json(path) for path in sorted(legacy_dir.glob("SRC-*.json")))
+        return [source for source in self._dedupe_records(records) if self.source_visible_in_workspace(workspace_ref, source)]
 
     def source_event_by_id(self, workspace_ref: str, event_id: str) -> dict[str, Any] | None:
         for event in self.source_events(workspace_ref):
@@ -523,6 +607,7 @@ class TEPHome:
             "relation": relation,
             "scope": {
                 "workspace_ref": workspace_ref,
+                "workspace_refs": [workspace_ref],
                 "project_refs": project_refs or [],
                 "task_refs": task_refs or [],
             },
@@ -546,6 +631,9 @@ class TEPHome:
         task_refs: list[str] | None = None,
         source_refs: list[str] | None = None,
         reason: str | None = None,
+        bridge_scope: str | None = None,
+        synced_object: dict[str, Any] | None = None,
+        bridge_limits: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.read_claim(workspace_ref, subject_ref)
         self.read_claim(workspace_ref, object_ref)
@@ -555,6 +643,11 @@ class TEPHome:
             "object": object_ref,
             "reason": reason,
         }
+        if relation_type == "applies_to_scope":
+            relation["bridge_scope"] = bridge_scope or "general"
+            relation["task_refs"] = task_refs or []
+            relation["synced_object"] = synced_object
+            relation["bridge_limits"] = bridge_limits or {}
         if statement is None:
             statement = f"{subject_ref} {relation_type} {object_ref}"
         support_refs = [subject_ref] if relation_type == "supports" else []
@@ -573,26 +666,62 @@ class TEPHome:
         )
 
     def find_claim_by_dedup_key(self, workspace_ref: str, dedup_key: str) -> dict[str, Any] | None:
-        claims_dir = self.workspace_dir(workspace_ref) / "records" / "clm"
-        if not claims_dir.exists():
-            return None
-        for path in sorted(claims_dir.glob("CLM-*.json")):
-            record = read_json(path)
+        for record in self.claims(workspace_ref):
             if record.get("dedup_key") == dedup_key:
                 return record
         return None
 
     def read_claim(self, workspace_ref: str, claim_ref: str) -> dict[str, Any]:
-        return read_json(self.claim_path(workspace_ref, claim_ref))
+        path = self.claim_path(workspace_ref, claim_ref)
+        if path.exists():
+            return read_json(path)
+        legacy = self._legacy_claim_path(workspace_ref, claim_ref)
+        if legacy.exists():
+            return read_json(legacy)
+        return read_json(path)
 
     def claims(self, workspace_ref: str) -> list[dict[str, Any]]:
-        claims_dir = self.workspace_dir(workspace_ref) / "records" / "clm"
-        if not claims_dir.exists():
-            return []
-        return [read_json(path) for path in sorted(claims_dir.glob("CLM-*.json"))]
+        records = [read_json(path) for path in sorted((self.records_dir() / "clm").glob("**/CLM-*.json"))]
+        legacy_dir = self.workspace_dir(workspace_ref) / "records" / "clm"
+        if legacy_dir.exists():
+            records.extend(read_json(path) for path in sorted(legacy_dir.glob("CLM-*.json")))
+        return [claim for claim in self._dedupe_records(records) if self.claim_visible_in_workspace(workspace_ref, claim)]
 
     def claim_path(self, workspace_ref: str, claim_ref: str) -> Path:
+        return self._record_path("clm", claim_ref)
+
+    def _legacy_claim_path(self, workspace_ref: str, claim_ref: str) -> Path:
         return self.workspace_dir(workspace_ref) / "records" / "clm" / f"{claim_ref}.json"
+
+    def claim_visible_in_workspace(self, workspace_ref: str, claim: dict[str, Any]) -> bool:
+        scope = claim.get("scope", {})
+        workspace_refs = set(scope.get("workspace_refs", []))
+        if scope.get("workspace_ref"):
+            workspace_refs.add(scope["workspace_ref"])
+        if workspace_ref in workspace_refs:
+            return True
+        project_refs = set(scope.get("project_refs", []))
+        return bool(project_refs and project_refs.intersection(self.visible_project_refs(workspace_ref)))
+
+    def source_visible_in_workspace(self, workspace_ref: str, source: dict[str, Any]) -> bool:
+        workspace_refs = set(source.get("workspace_refs", []))
+        if source.get("workspace_ref"):
+            workspace_refs.add(source["workspace_ref"])
+        if workspace_ref in workspace_refs:
+            return True
+        project_refs = set(source.get("project_refs", []))
+        return bool(project_refs and project_refs.intersection(self.visible_project_refs(workspace_ref)))
+
+    @staticmethod
+    def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        result = []
+        for record in records:
+            record_id = record.get("id")
+            if isinstance(record_id, str) and record_id not in seen:
+                seen.add(record_id)
+                result.append(record)
+        return result
 
     def create_task(
         self,
@@ -813,11 +942,34 @@ class TEPHome:
             handle.write(canonical_dumps(row))
             handle.write("\n")
 
-    def _write_json(self, path: Path, record: dict[str, Any]) -> None:
+    def _write_json(self, path: Path, record: dict[str, Any], *, tx: FileTransaction | None = None) -> None:
+        if tx is not None:
+            tx.stage_json(path, record)
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(canonical_dumps(record) + "\n", encoding="utf-8")
         os.replace(tmp, path)
+
+    def _commit_transaction(self, tx: FileTransaction, operation: str, *, refs: dict[str, Any]) -> dict[str, Any]:
+        data_writes = tx.writes
+        journal_row = {
+            "recorded_at": utc_now(),
+            "tx_ref": tx.tx_ref,
+            "operation": operation,
+            "status": "committed",
+            "refs": refs,
+            "write_count": len(data_writes),
+            "write_hashes": [item.content_hash for item in data_writes],
+        }
+        journal_path = self.root / "journals" / "operations" / f"{journal_row['recorded_at'][:7]}.jsonl"
+        journal_content = journal_path.read_text(encoding="utf-8") if journal_path.exists() else ""
+        tx.stage_text(journal_path, journal_content + canonical_dumps(journal_row) + "\n")
+        try:
+            return tx.commit()
+        except Exception:
+            tx.abort()
+            raise
 
     @staticmethod
     def _captured_text_hash(value: str | dict[str, Any]) -> str:

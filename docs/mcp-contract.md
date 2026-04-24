@@ -400,13 +400,18 @@ The names below are typed aliases/operation kinds. They are not independent
 protocol primitives.
 
 `register_project`
-: Create or update a global `PRJ-*`.
+: Create or update a global `PRJ-*`. `project_type` may classify the node as
+domain, system, project group, repo, service, docs, external reference, or
+example. Parent project refs model recursive project scopes.
 
 `create_workspace`
 : Create a `WSP-*`.
 
 `attach_project_to_workspace`
-: Append a project membership row with role and reason.
+: Append a project membership row with role, reason, and optional
+`include_children`. If children are included, runtime visibility expands through
+recursive child `PRJ-*` records, but lookup and gates still preserve role and
+bridge policy.
 
 `create_task`
 : Create a scoped `TASK-*`.
@@ -481,6 +486,18 @@ created when the relation enters a ledger branch.
 Relation creation uses a canonical relation dedup key. A duplicate relation
 must reuse the existing relation unless the request includes a real
 `distinction_reason`.
+
+Cross-project relation creation is valid only when both endpoint project scopes
+are visible in the current workspace. This applies to possible relations and
+hypotheses; the repair move is to attach the missing `PRJ-*` with an explicit
+role/reason before linking.
+
+`applies_to_scope` relations may include bridge context:
+
+- `bridge_scope=general`: broad applicability, no domain merge.
+- `bridge_scope=task`: applicability only for listed `TASK-*`.
+- `bridge_scope=object_sync`: applicability only for a concrete synchronized
+  object described by `synced_object`.
 
 Inference relation creation must state the inference kind and basis. Deduction
 requires explicit premise/rule refs, induction requires sample/scope refs,

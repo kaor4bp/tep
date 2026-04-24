@@ -18,7 +18,7 @@ from tep import (
     read_project_pointer,
 )
 from tep.crypto import public_key_from_private
-from tep.errors import CanonicalJSONError, OwnershipError, ValidationError
+from tep.errors import CanonicalJSONError, OwnershipError, StorageError, ValidationError
 from tep.jsoncanon import bytes_hash, canonical_dumps
 from tep.mcp_stdio_server import TEPMCPStdioServer
 
@@ -872,6 +872,210 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(example_result["requires_bridge"])
             self.assertFalse(example_result["proof_usable_now"])
 
+    def test_project_scoped_claim_is_visible_across_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            project = runtime.register_project("shared-service").data["project"]
+            first_workspace = runtime.create_workspace("first").data["workspace"]
+            second_workspace = runtime.create_workspace("second").data["workspace"]
+            runtime.attach_project_to_workspace(first_workspace["id"], project["id"], role="primary", reason="capture")
+            runtime.attach_project_to_workspace(second_workspace["id"], project["id"], role="primary", reason="reuse")
+
+            source = runtime.create_source(
+                first_workspace["id"],
+                source_kind="file_quote",
+                quote="Shared service uses settings.py for retry policy.",
+                critique_status="accepted",
+                classification={
+                    "source_class": "first_party_project",
+                    "document_kind": "source_code",
+                    "evidence_role": "implementation",
+                    "authority_scope": "implementation_detail",
+                    "independence_key": "repo:shared",
+                },
+                project_refs=[project["id"]],
+            ).data["source"]
+            claim = runtime.create_claim(
+                first_workspace["id"],
+                "Shared service uses settings.py for retry policy.",
+                source_refs=[source["id"]],
+                project_refs=[project["id"]],
+            ).data["claim"]
+
+            lookup = runtime.lookup_facts(second_workspace["id"], query="retry")
+            self.assertTrue(lookup.ok, lookup.error)
+            self.assertIn(claim["id"], {item["record_ref"] for item in lookup.data["results"]})
+            self.assertTrue(str(store.claim_path(first_workspace["id"], claim["id"])).startswith(str(Path(tmp) / "records" / "clm")))
+
+    def test_legacy_workspace_claim_and_source_paths_still_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            workspace = store.create_workspace("legacy")
+            identity = generate_agent_identity("legacy-agent")
+            store.create_agent(workspace["id"], identity, thread_ref="thread-1")
+            source = store.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Legacy source remains valid.",
+                classification={
+                    "input_class": "user_confirmation",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "approval",
+                    "authority_scope": "workspace_policy",
+                    "independence_key": "user:legacy",
+                },
+            )
+            claim = store.create_claim(workspace["id"], "Legacy source remains valid.", source_refs=[source["id"]])
+            ledger = Ledger(store, workspace["id"], identity.agent_ref)
+            ledger.append_claim(private_key=identity.private_key, claim_ref=claim["id"], why="Snapshot before path migration.", difficulty_bits=8)
+
+            legacy_source = store._legacy_source_path(workspace["id"], source["id"])
+            legacy_claim = store._legacy_claim_path(workspace["id"], claim["id"])
+            legacy_events = store.workspace_dir(workspace["id"]) / "records" / "src" / "source_events.jsonl"
+            legacy_source.parent.mkdir(parents=True, exist_ok=True)
+            legacy_claim.parent.mkdir(parents=True, exist_ok=True)
+            store.source_path(workspace["id"], source["id"]).rename(legacy_source)
+            store.claim_path(workspace["id"], claim["id"]).rename(legacy_claim)
+            store.records_dir().joinpath("src", "source_events.jsonl").rename(legacy_events)
+
+            validation = ledger.validate()
+            self.assertTrue(validation.ok, validation.errors)
+
+    def test_relation_between_projects_requires_workspace_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            primary = runtime.register_project("primary").data["project"]
+            foreign = runtime.register_project("foreign").data["project"]
+            runtime.attach_project_to_workspace(workspace["id"], primary["id"], role="primary", reason="target")
+            primary_claim = runtime.create_claim(workspace["id"], "Primary behavior.", project_refs=[primary["id"]]).data["claim"]
+            foreign_claim = runtime.create_claim(workspace["id"], "Foreign behavior.", project_refs=[foreign["id"]]).data["claim"]
+
+            link = runtime.link_claims(
+                workspace["id"],
+                relation_type="possible_relation_between",
+                subject_ref=primary_claim["id"],
+                object_ref=foreign_claim["id"],
+                reason="Maybe related.",
+            )
+
+            self.assertFalse(link.ok)
+            self.assertEqual(link.error["code"], "validation_failed")
+            self.assertIn("relation_project_not_in_workspace", link.error["message"])
+
+    def test_task_specific_bridge_only_applies_to_that_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            primary = runtime.register_project("primary").data["project"]
+            example = runtime.register_project("example").data["project"]
+            runtime.attach_project_to_workspace(workspace["id"], primary["id"], role="primary", reason="target")
+            runtime.attach_project_to_workspace(workspace["id"], example["id"], role="example", reason="reference")
+            task = runtime.create_task(workspace["id"], "Use retry example", project_refs=[primary["id"]]).data["task"]
+            other_task = runtime.create_task(workspace["id"], "Use timeout example", project_refs=[primary["id"]]).data["task"]
+            identity = generate_agent_identity("bridge-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="The example applies to this retry task.",
+                classification={
+                    "input_class": "user_confirmation",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "approval",
+                    "authority_scope": "workspace_policy",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            example_claim = runtime.create_claim(
+                workspace["id"],
+                "Example uses retry middleware.",
+                source_refs=[source["id"]],
+                project_refs=[example["id"]],
+            ).data["claim"]
+            primary_claim = runtime.create_claim(
+                workspace["id"],
+                "Retry middleware is applicable to the primary task.",
+                source_refs=[source["id"]],
+                project_refs=[primary["id"]],
+                task_refs=[task["id"]],
+            ).data["claim"]
+            for claim in [example_claim, primary_claim]:
+                runtime.append_ledger(
+                    workspace_ref=workspace["id"],
+                    agent_ref=agent["id"],
+                    private_key=identity.private_key,
+                    claim_ref=claim["id"],
+                    why="Ledger support claim.",
+                    difficulty_bits=8,
+                )
+            bridge = runtime.link_claims(
+                workspace["id"],
+                relation_type="applies_to_scope",
+                subject_ref=example_claim["id"],
+                object_ref=primary_claim["id"],
+                task_refs=[task["id"]],
+                bridge_scope="task",
+                reason="User scoped the bridge to this task.",
+            ).data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=bridge["id"],
+                why="Ledger task bridge.",
+                difficulty_bits=8,
+            )
+
+            allowed = runtime.final_answer_preflight(workspace_ref=workspace["id"], agent_ref=agent["id"], task_ref=task["id"], support_refs=[example_claim["id"]])
+            blocked = runtime.final_answer_preflight(workspace_ref=workspace["id"], agent_ref=agent["id"], task_ref=other_task["id"], support_refs=[example_claim["id"]])
+
+            self.assertTrue(allowed.data["final_answer_preflight"]["allowed"], allowed.data["final_answer_preflight"]["blockers"])
+            self.assertTrue(allowed.data["final_answer_preflight"]["support"][0]["bridge_context"]["task_specific"])
+            self.assertFalse(blocked.data["final_answer_preflight"]["allowed"])
+
+    def test_object_sync_bridge_is_exposed_in_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            primary = runtime.register_project("primary").data["project"]
+            example = runtime.register_project("example").data["project"]
+            runtime.attach_project_to_workspace(workspace["id"], primary["id"], role="primary", reason="target")
+            runtime.attach_project_to_workspace(workspace["id"], example["id"], role="example", reason="reference")
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="These DTO fields are synchronized.",
+                classification={
+                    "input_class": "user_confirmation",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "approval",
+                    "authority_scope": "workspace_policy",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            example_claim = runtime.create_claim(workspace["id"], "Example DTO has customer_id.", source_refs=[source["id"]], project_refs=[example["id"]]).data["claim"]
+            primary_claim = runtime.create_claim(workspace["id"], "Primary DTO has customer_id.", source_refs=[source["id"]], project_refs=[primary["id"]]).data["claim"]
+            runtime.link_claims(
+                workspace["id"],
+                relation_type="applies_to_scope",
+                subject_ref=example_claim["id"],
+                object_ref=primary_claim["id"],
+                bridge_scope="object_sync",
+                synced_object={"kind": "field", "from": "ExampleDTO.customer_id", "to": "PrimaryDTO.customer_id"},
+                reason="Same synchronized field.",
+            )
+
+            lookup = runtime.lookup_facts(workspace["id"], query="Example DTO")
+            result = next(item for item in lookup.data["results"] if item["record_ref"] == example_claim["id"])
+            self.assertEqual(result["bridge_context"]["bridge_scope"], "object_sync")
+            self.assertTrue(result["bridge_context"]["object_sync"])
+            self.assertEqual(result["bridge_context"]["synced_object"]["to"], "PrimaryDTO.customer_id")
+
     def test_link_claims_blocks_hypothesis_on_hypothesis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Runtime(TEPHome(tmp))
@@ -1411,7 +1615,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.1")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.2")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -1498,6 +1702,35 @@ class CoreTests(unittest.TestCase):
             pointer = read_project_pointer(project_root)
             self.assertEqual(pointer.project_ref, project["id"])
             self.assertEqual(result["project"]["name"], "existing")
+
+    def test_init_project_pointer_rolls_back_new_project_when_pointer_commit_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            (project_root / ".tep").mkdir()
+
+            with self.assertRaises(StorageError):
+                init_project_pointer(project_root, tep_home=tep_home, name="broken", force=True)
+
+            store = TEPHome(tep_home)
+            self.assertEqual(store.projects(), [])
+            self.assertFalse((tep_home / "runtime" / "tx").exists() and any((tep_home / "runtime" / "tx").iterdir()))
+
+    def test_project_registry_mutations_are_journaled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            store = TEPHome(tep_home)
+
+            project = store.register_project("journaled", roots=[str(Path(tmp) / "project")])
+            workspace = store.create_workspace("journaled workspace")
+            store.archive_project(project["id"], reason="test archive")
+            store.archive_workspace(workspace["id"], reason="test archive")
+
+            journal_files = sorted((tep_home / "journals" / "operations").glob("*.jsonl"))
+            self.assertEqual(len(journal_files), 1)
+            operations = [json.loads(line)["operation"] for line in journal_files[0].read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(operations, ["register_project", "create_workspace", "archive_project", "archive_workspace"])
 
 
 if __name__ == "__main__":

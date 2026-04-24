@@ -105,7 +105,10 @@ Rules:
   equivalence, duplicate, and revision reasoning.
 
 For foreign/example project facts, treat lookup results as navigation until a
-ledgered applicability relation connects them to the current scope.
+ledgered applicability relation connects them to the current scope. Do not link
+two project scopes unless both are visible in the current workspace. When a
+bridge is needed, prefer explicit bridge context: `general`, `task`, or
+`object_sync` with the concrete synchronized object.
 
 ## Ledger And ACT Flow
 

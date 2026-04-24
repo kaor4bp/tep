@@ -229,7 +229,13 @@ class MCPAdapter:
         )
 
     def _register_project(self, args: dict[str, Any]) -> RuntimeResponse:
-        return self.runtime.register_project(args["name"], roots=args.get("roots"), aliases=args.get("aliases"))
+        return self.runtime.register_project(
+            args["name"],
+            roots=args.get("roots"),
+            aliases=args.get("aliases"),
+            project_type=args.get("project_type", "repo"),
+            parent_project_refs=args.get("parent_project_refs"),
+        )
 
     def _create_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.create_workspace(args["name"])
@@ -238,7 +244,13 @@ class MCPAdapter:
         return self.runtime.archive_workspace(args["workspace_ref"], reason=args["reason"])
 
     def _attach_project_to_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
-        return self.runtime.attach_project_to_workspace(args["workspace_ref"], args["project_ref"], role=args["role"], reason=args["reason"])
+        return self.runtime.attach_project_to_workspace(
+            args["workspace_ref"],
+            args["project_ref"],
+            role=args["role"],
+            reason=args["reason"],
+            include_children=args.get("include_children", False),
+        )
 
     def _archive_project(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.archive_project(args["project_ref"], reason=args["reason"])

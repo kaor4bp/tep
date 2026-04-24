@@ -4,8 +4,10 @@ TEP separates project identity from workspace knowledge scope.
 
 ## Projects
 
-`PRJ-*` is global. It represents a repository, service, product codebase, or
-other implementation root.
+`PRJ-*` is global. It is the only canonical project/scope node in v1. A
+`PRJ-*` may represent a repository, service, documentation set, domain object,
+system, aggregate of projects, external reference, or implementation example.
+Repository is a project type, not the definition of `PRJ-*`.
 
 It is not owned by one workspace. The same project can be attached to multiple
 workspaces with different roles.
@@ -21,7 +23,9 @@ Minimal fields:
 {
   "id": "PRJ-*",
   "record_type": "project",
+  "project_type": "domain|system|project_group|repo|service|library|docs|external_reference|example",
   "name": "service-api",
+  "parent_project_refs": ["PRJ-*"],
   "roots": ["/path/to/repo"],
   "aliases": ["api"],
   "status": "active",
@@ -32,8 +36,10 @@ Minimal fields:
 
 ## Workspaces
 
-`WSP-*` is a durable knowledge scope. It owns workspace-domain claims, tasks,
-agent threads, maps, indexes, artifacts, and project memberships.
+`WSP-*` is a durable working scope. It owns tasks, agent threads, maps, indexes,
+artifacts, and project memberships. It does not physically own `SRC-*` or
+`CLM-*`; those records are global and become visible through workspace/project
+scope policy.
 
 Project membership row:
 
@@ -41,6 +47,7 @@ Project membership row:
 {
   "project_ref": "PRJ-*",
   "role": "primary|dependency|example|reference|comparison|archived",
+  "include_children": true,
   "reason": "why this project is in this workspace",
   "active": true,
   "added_at": "iso8601"
@@ -55,6 +62,20 @@ Role meanings:
 - `reference`: useful background implementation or documentation source.
 - `comparison`: project used to compare behavior or design.
 - `archived`: known but not part of normal lookup.
+
+If `include_children=true`, the workspace sees recursive child `PRJ-*` records
+with the parent membership role. This lets a workspace attach a domain/system
+project and see its implementation repositories without introducing a separate
+canonical `DOM-*` or `SYS-*` record type.
+
+Hard scope rule:
+
+- The agent cannot create a relation between two `PRJ-*` scopes unless both
+  scopes are visible in the current workspace, directly or through
+  `include_children`.
+- This applies to hypotheses too. A possible relation is still a relation
+  attempt; the agent must first attach the other project/scope to the
+  workspace with a reason.
 
 ## Default Lookup Mode
 
@@ -106,6 +127,29 @@ Foreign/example result:
 }
 ```
 
+Bridge-aware result:
+
+```json
+{
+  "record_ref": "CLM-*",
+  "scope_origin": "example",
+  "requires_bridge": true,
+  "bridge_context": {
+    "bridge_ref": "CLM-*",
+    "bridge_scope": "general|task|object_sync",
+    "task_specific": true,
+    "task_refs": ["TASK-*"],
+    "object_sync": false,
+    "synced_object": null,
+    "bridge_limits": {"max_depth": 1}
+  }
+}
+```
+
+`bridge_context` distinguishes a general applicability relation from a relation
+that applies to a specific task or to synchronization of a concrete object,
+field, API route, schema, contract, or artifact.
+
 ## Foreign Project Facts
 
 Foreign/example project facts can guide inspection and curiosity. They cannot
@@ -123,6 +167,18 @@ the agent must create or select a relation `CLM-*`, for example:
 The relation claim must explain why the source project fact applies to the
 current workspace, task, or primary project. That relation itself must enter the
 ledger before the foreign fact can support commitment.
+
+Bridge relations are bounded:
+
+- `general`: the relation explains broad applicability but still does not merge
+  whole project domains.
+- `task`: the relation is valid only for listed `TASK-*` records.
+- `object_sync`: the relation is valid for a concrete synchronized object,
+  field, route, schema, artifact, or contract described in `synced_object`.
+
+An `object_sync` bridge should identify both sides of the synchronized object
+and the boundary being synchronized. It does not authorize unrelated facts from
+either project.
 
 ## Multi-Project Tasks And Indexing
 

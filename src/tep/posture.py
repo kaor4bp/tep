@@ -164,14 +164,16 @@ class PostureService:
     def scope_metadata(self, workspace_ref: str, claim: dict[str, Any], task: dict[str, Any] | None) -> dict[str, Any]:
         claim_projects = set(claim.get("scope", {}).get("project_refs", []))
         task_projects = set(task.get("project_refs", [])) if task else set()
-        memberships = self.store.project_memberships(workspace_ref)
-        roles = {row["project_ref"]: row["role"] for row in memberships}
+        roles = self.store.project_roles_for_workspace(workspace_ref)
         if not claim_projects:
             scope_origin = "workspace"
             requires_bridge = False
         elif task_projects and claim_projects.intersection(task_projects):
             scope_origin = "primary_project"
             requires_bridge = False
+        elif not claim_projects.issubset(set(roles)):
+            scope_origin = "foreign"
+            requires_bridge = True
         else:
             role_set = {roles.get(project_ref, "unknown") for project_ref in claim_projects}
             if "primary" in role_set:
@@ -190,6 +192,8 @@ class PostureService:
             "scope_origin": scope_origin,
             "proof_usable_now": not requires_bridge,
             "requires_bridge": requires_bridge,
+            "visible_project_refs": sorted(claim_projects.intersection(set(roles))),
+            "foreign_project_refs": sorted(claim_projects.difference(set(roles))),
         }
 
     @staticmethod

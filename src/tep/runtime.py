@@ -64,10 +64,18 @@ class Runtime:
 
         return self._guard(op)
 
-    def register_project(self, name: str, *, roots: list[str] | None = None, aliases: list[str] | None = None) -> RuntimeResponse:
+    def register_project(
+        self,
+        name: str,
+        *,
+        roots: list[str] | None = None,
+        aliases: list[str] | None = None,
+        project_type: str = "repo",
+        parent_project_refs: list[str] | None = None,
+    ) -> RuntimeResponse:
         return self._guard(
             lambda: ok_response(
-                {"project": self.store.register_project(name, roots=roots, aliases=aliases)},
+                {"project": self.store.register_project(name, roots=roots, aliases=aliases, project_type=project_type, parent_project_refs=parent_project_refs)},
                 valid_moves=[move("mutate_record", "attach_project_to_workspace", "Attach project to a workspace scope.", writes=True)],
             )
         )
@@ -96,10 +104,18 @@ class Runtime:
             )
         )
 
-    def attach_project_to_workspace(self, workspace_ref: str, project_ref: str, *, role: str, reason: str) -> RuntimeResponse:
+    def attach_project_to_workspace(
+        self,
+        workspace_ref: str,
+        project_ref: str,
+        *,
+        role: str,
+        reason: str,
+        include_children: bool = False,
+    ) -> RuntimeResponse:
         return self._guard(
             lambda: ok_response(
-                {"membership": self.store.attach_project_to_workspace(workspace_ref, project_ref, role=role, reason=reason)},
+                {"membership": self.store.attach_project_to_workspace(workspace_ref, project_ref, role=role, reason=reason, include_children=include_children)},
                 valid_moves=[move("mutate_record", "create_task", "Create or resume a task in this workspace.", writes=True)],
             )
         )
@@ -418,9 +434,12 @@ class Runtime:
         task_refs: list[str] | None = None,
         source_refs: list[str] | None = None,
         reason: str | None = None,
+        bridge_scope: str | None = None,
+        synced_object: dict[str, Any] | None = None,
+        bridge_limits: dict[str, Any] | None = None,
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
-            self._validate_relation_bases(workspace_ref, relation_type, subject_ref, object_ref)
+            self._validate_relation_bases(workspace_ref, relation_type, subject_ref, object_ref, task_refs=task_refs, bridge_scope=bridge_scope, synced_object=synced_object)
             relation_claim = self.store.create_relation_claim(
                 workspace_ref,
                 relation_type=relation_type,
@@ -431,6 +450,9 @@ class Runtime:
                 task_refs=task_refs,
                 source_refs=source_refs,
                 reason=reason,
+                bridge_scope=bridge_scope,
+                synced_object=synced_object,
+                bridge_limits=bridge_limits,
             )
             valid_moves = [
                 move("append_ledger", "append_ledger", "Snapshot relation claim into current ledger.", writes=True),
@@ -930,6 +952,7 @@ class Runtime:
         task = self.store.read_task(workspace_ref, task_ref) if task_ref else None
         scope = self.posture.scope_metadata(workspace_ref, claim, task)
         trust_posture = self.posture.trust_posture(workspace_ref, claim)
+        bridge_context = self._scope_bridge_context(workspace_ref, claim["id"], task)
         return {
             "record_ref": claim["id"],
             "statement": claim["statement"],
@@ -938,6 +961,7 @@ class Runtime:
             "project_refs": claim.get("scope", {}).get("project_refs", []),
             "proof_usable_now": scope["proof_usable_now"] and "answer" in trust_posture["usable_for"],
             "requires_bridge": scope["requires_bridge"],
+            "bridge_context": bridge_context,
             "trust_posture": trust_posture,
             "drilldown": claim.get("source_refs", []),
             "valid_moves": [
@@ -990,9 +1014,11 @@ class Runtime:
             if "answer" not in posture["usable_for"]:
                 claim_blockers.append("claim_not_usable_for_answer")
             bridge_ref = None
+            bridge_context = None
             if scope["requires_bridge"]:
-                bridge_ref = self._scope_bridge_ref(workspace_ref, claim_ref, ledgered_claim_refs)
-                if bridge_ref is None:
+                bridge_context = self._scope_bridge_context(workspace_ref, claim_ref, task, ledgered_claim_refs)
+                bridge_ref = bridge_context.get("bridge_ref") if bridge_context else None
+                if bridge_context is None:
                     claim_blockers.append("missing_scope_bridge")
             if claim_blockers:
                 blockers.append(
@@ -1008,6 +1034,7 @@ class Runtime:
                     "trust_posture": posture,
                     "scope": scope,
                     "bridge_ref": bridge_ref,
+                    "bridge_context": bridge_context,
                     "ledgered": claim_ref in ledgered_claim_refs,
                     "blockers": claim_blockers,
                 }
@@ -1030,15 +1057,37 @@ class Runtime:
         rows = self.store.read_jsonl(self.store.ledger_path(workspace_ref, agent_ref))
         return {row["ref"] for row in rows if isinstance(row.get("ref"), str) and row.get("kind") in {"claim", "relation", "act", "capture", "close_act"}}
 
-    def _scope_bridge_ref(self, workspace_ref: str, claim_ref: str, ledgered_claim_refs: set[str]) -> str | None:
+    def _scope_bridge_context(
+        self,
+        workspace_ref: str,
+        claim_ref: str,
+        task: dict[str, Any] | None,
+        ledgered_claim_refs: set[str] | None = None,
+    ) -> dict[str, Any] | None:
         for claim in self.store.claims(workspace_ref):
-            if claim["id"] not in ledgered_claim_refs:
+            if ledgered_claim_refs is not None and claim["id"] not in ledgered_claim_refs:
                 continue
             relation = claim.get("relation") or {}
             if relation.get("type") != "applies_to_scope":
                 continue
             if claim_ref in {relation.get("subject"), relation.get("object")}:
-                return claim["id"]
+                bridge_scope = relation.get("bridge_scope") or "general"
+                task_refs = set(relation.get("task_refs") or claim.get("scope", {}).get("task_refs", []))
+                task_ref = task.get("id") if task else None
+                task_specific = bridge_scope == "task" and task_ref in task_refs
+                object_sync = bridge_scope == "object_sync" and relation.get("synced_object") is not None
+                if bridge_scope == "task" and not task_specific:
+                    continue
+                return {
+                    "bridge_ref": claim["id"],
+                    "bridge_scope": bridge_scope,
+                    "task_specific": task_specific,
+                    "task_refs": sorted(task_refs),
+                    "object_sync": object_sync,
+                    "synced_object": relation.get("synced_object"),
+                    "bridge_limits": relation.get("bridge_limits") or {},
+                    "ledgered": ledgered_claim_refs is not None,
+                }
         return None
 
     def _gate_ledger_pressure(self, agent_ref: str, gate: dict[str, Any]) -> dict[str, Any]:
@@ -1072,7 +1121,17 @@ class Runtime:
             moves.append(move("mutate_record", "attach_agent_to_task", "Attach current agent to task.", writes=True))
         return moves
 
-    def _validate_relation_bases(self, workspace_ref: str, relation_type: str, subject_ref: str, object_ref: str) -> None:
+    def _validate_relation_bases(
+        self,
+        workspace_ref: str,
+        relation_type: str,
+        subject_ref: str,
+        object_ref: str,
+        *,
+        task_refs: list[str] | None = None,
+        bridge_scope: str | None = None,
+        synced_object: dict[str, Any] | None = None,
+    ) -> None:
         allowed = {
             "supports",
             "contradicts",
@@ -1089,6 +1148,24 @@ class Runtime:
 
         subject = self.store.read_claim(workspace_ref, subject_ref)
         obj = self.store.read_claim(workspace_ref, object_ref)
+        invisible = [
+            claim["id"]
+            for claim in [subject, obj]
+            if not self.store.claim_visible_in_workspace(workspace_ref, claim)
+        ]
+        if invisible:
+            raise ValidationError("relation_scope_not_visible:" + ",".join(invisible))
+        relation_projects = set(subject.get("scope", {}).get("project_refs", [])) | set(obj.get("scope", {}).get("project_refs", []))
+        if relation_projects and not relation_projects.issubset(self.store.visible_project_refs(workspace_ref)):
+            raise ValidationError("relation_project_not_in_workspace:" + ",".join(sorted(relation_projects)))
+        if relation_type == "applies_to_scope":
+            selected_scope = bridge_scope or "general"
+            if selected_scope not in {"general", "task", "object_sync"}:
+                raise ValidationError(f"unsupported_bridge_scope:{selected_scope}")
+            if selected_scope == "task" and not task_refs:
+                raise ValidationError("task_bridge_requires_task_refs")
+            if selected_scope == "object_sync" and not synced_object:
+                raise ValidationError("object_sync_bridge_requires_synced_object")
         hypothesis_builders = {
             "deduced_from",
             "induced_from",

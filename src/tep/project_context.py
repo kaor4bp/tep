@@ -11,6 +11,7 @@ from typing import Any
 from .errors import ValidationError
 from .jsoncanon import canonical_dumps, read_json
 from .storage import TEPHome
+from .transactions import FileTransaction
 
 
 @dataclass(frozen=True)
@@ -40,11 +41,21 @@ def read_project_pointer(project_root: str | os.PathLike[str]) -> ProjectPointer
     )
 
 
-def write_project_pointer(project_root: str | os.PathLike[str], pointer: ProjectPointer, *, force: bool = False) -> ProjectPointer:
+def write_project_pointer(
+    project_root: str | os.PathLike[str],
+    pointer: ProjectPointer,
+    *,
+    force: bool = False,
+    tx: FileTransaction | None = None,
+) -> ProjectPointer:
     path = pointer_path(project_root)
     if path.exists() and not force:
         raise ValidationError(f"project pointer already exists: {path}")
-    path.write_text(canonical_dumps(pointer.as_dict()) + "\n", encoding="utf-8")
+    content = canonical_dumps(pointer.as_dict()) + "\n"
+    if tx is not None:
+        tx.stage_text(path, content)
+    else:
+        path.write_text(content, encoding="utf-8")
     return pointer
 
 
@@ -59,14 +70,32 @@ def init_project_pointer(
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     store = TEPHome(tep_home)
-    if project_ref is None:
-        project = store.find_project_by_root(root)
-        if project is None:
-            project = store.register_project(name or root.name, roots=[str(root)])
-        project_ref = project["id"]
-    else:
-        project = store.read_project(project_ref)
-    pointer = write_project_pointer(root, ProjectPointer(str(Path(tep_home).expanduser()), project_ref, mcp_server), force=force)
+    pointer_file = pointer_path(root)
+    if pointer_file.exists() and not force:
+        raise ValidationError(f"project pointer already exists: {pointer_file}")
+    tx = store.begin_transaction("init_project_pointer")
+    try:
+        if project_ref is None:
+            project = store.find_project_by_root(root)
+            if project is None:
+                project = store.register_project(name or root.name, roots=[str(root)], tx=tx)
+            project_ref = project["id"]
+        else:
+            project = store.read_project(project_ref)
+        pointer = write_project_pointer(
+            root,
+            ProjectPointer(str(Path(tep_home).expanduser()), project_ref, mcp_server),
+            force=force,
+            tx=tx,
+        )
+        store._commit_transaction(
+            tx,
+            "init_project_pointer",
+            refs={"project_ref": project_ref, "project_root": str(root), "pointer_path": str(pointer_file)},
+        )
+    except Exception:
+        tx.abort()
+        raise
     return {
         "pointer": pointer.as_dict(),
         "project": project,
