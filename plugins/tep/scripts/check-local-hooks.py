@@ -141,8 +141,10 @@ def check(cwd: Path) -> dict[str, object]:
         if server.startswith("http://") or server.startswith("https://"):
             health = _check_http(server)
             add("http_transport_health", bool(health.get("ok")), json.dumps(health, sort_keys=True))
+        elif server == "stdio":
+            add("stdio_transport", True, "mcp_server='stdio'; hooks use local typed adapter fallback")
         else:
-            add("http_transport_health", False, f"mcp_server={server!r}", repair="Use HTTP for standalone mode or start stdio explicitly.")
+            add("transport_config", False, f"mcp_server={server!r}", repair="Use mcp_server='stdio' or an HTTP TEP endpoint.")
 
     ok = all(bool(item["ok"]) for item in checks if item["name"] not in {"project_pointer", "http_transport_health"})
     return {"ok": ok, "repo_root": str(repo), "checks": checks}

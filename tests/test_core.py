@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -1264,6 +1267,108 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(source["critique_status"], "accepted")
             self.assertEqual(store.read_input(workspace["id"], inp["id"])["content_hash"], inp["content_hash"])
 
+    def test_codex_hook_captures_user_prompt_with_stdio_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            env["TEP_REPO_ROOT"] = str(Path(__file__).resolve().parents[1])
+            payload = {"cwd": str(project_root), "prompt": "Remember that prompt hooks should create INP records."}
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "user-prompt"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            inputs = sorted((tep_home / "workspaces" / workspace["id"] / "records" / "inp").glob("INP-*.json"))
+            self.assertEqual(len(inputs), 1)
+            inp = json.loads(inputs[0].read_text(encoding="utf-8"))
+            self.assertEqual(inp["text"], payload["prompt"])
+            self.assertEqual(inp["input_class"], "instruction")
+
+    def test_codex_hook_resolves_workspace_from_project_root_when_pointer_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            (project_root / ".tep").write_text(
+                json.dumps({"tep_home": str(tep_home), "project_ref": "PRJ-stale", "mcp_server": "stdio"}),
+                encoding="utf-8",
+            )
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            env["TEP_REPO_ROOT"] = str(Path(__file__).resolve().parents[1])
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "user-prompt"],
+                input=json.dumps({"cwd": str(project_root), "prompt": "Stale .tep project refs should not block hook capture."}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            inputs = sorted((tep_home / "workspaces" / workspace["id"] / "records" / "inp").glob("INP-*.json"))
+            self.assertEqual(len(inputs), 1)
+
+    def test_codex_hook_captures_post_bash_with_stdio_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            env["TEP_REPO_ROOT"] = str(Path(__file__).resolve().parents[1])
+            payload = {
+                "cwd": str(project_root),
+                "tool_input": {"command": "echo ok"},
+                "tool_response": {"exit_code": 0},
+            }
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "post-bash"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            runs = sorted((tep_home / "workspaces" / workspace["id"] / "records" / "run").glob("RUN-*.json"))
+            self.assertEqual(len(runs), 1)
+            run = json.loads(runs[0].read_text(encoding="utf-8"))
+            self.assertEqual(run["command"], "echo ok")
+            self.assertEqual(run["exit_code"], 0)
+
     def test_secret_input_is_encrypted_not_redacted_or_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -1631,7 +1736,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.4")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.5")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
