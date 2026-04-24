@@ -16,6 +16,7 @@
     "mcp"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks.json",
   "interface": {
     "displayName": "Trust Evidence Protocol",
     "shortDescription": "Use TEP fact storage, sources, probes, and sealed reasoning ledgers.",

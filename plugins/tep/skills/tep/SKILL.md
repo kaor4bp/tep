@@ -44,18 +44,29 @@ directly and do not invent raw JSON mutation paths.
 
 At the beginning of a TEP-backed task:
 
-1. Read the local `.tep` pointer if present.
-2. Call `generate_agent_identity` if this thread does not already hold an
+1. Check local hook visibility with `plugins/tep/scripts/check-local-hooks.py`.
+   Treat failures as setup blockers for automatic capture, not as permission to
+   bypass typed TEP tools. Report the smallest repair step.
+2. Read the local `.tep` pointer if present.
+3. Confirm whether `mcp_server` is HTTP or stdio. Prefer HTTP for standalone
+   hook capture; stdio is still valid for explicit local tool calls.
+4. Call `generate_agent_identity` if this thread does not already hold an
    in-memory identity.
-3. Keep `agent_private_key` only in memory for the current agent session.
-4. Call `start_agent_thread`.
-5. Call `brief_current_context`.
-6. If the current user message contains task facts or instructions that should
+5. Keep `agent_private_key` only in memory for the current agent session.
+6. Call `start_agent_thread`.
+7. Call `brief_current_context`.
+8. If the current user message contains task facts or instructions that should
    survive the chat, call `capture_input`.
 
 `AGENT-*` is a live thread/session, not a reusable personality. Do not continue
 another agent's ledger with this thread's key. Foreign ledgers are readable for
 coordination but appendable only by their owner identity.
+
+The plugin ships Codex hook adapters for `SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, and `Stop`. Hooks are conservative: they check
+visibility, block direct `.tep` writes, and best-effort capture prompts and Bash
+runs only when a local `.tep` pointer, HTTP transport, and `TEP_WORKSPACE_REF`
+are available. Explicit MCP/tool calls remain the reliable path.
 
 ## Source Capture
 
@@ -129,4 +140,3 @@ Good default loop:
 5. Append supported reasoning.
 6. Open and close probes for uncertain or protected work.
 7. Validate ledger before final answer or task done.
-
