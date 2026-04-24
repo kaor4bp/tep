@@ -23,11 +23,23 @@ REQUIRED_HOOKS = {
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    plugin_root = _plugin_root()
+    for candidate in [plugin_root, *plugin_root.parents]:
+        if (candidate / ".agents" / "plugins" / "marketplace.json").exists():
+            return candidate
+    return plugin_root
 
 
 def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
+def _plugin_root() -> Path:
+    script = Path(__file__).resolve()
+    for candidate in [script.parent, *script.parents]:
+        if (candidate / ".codex-plugin" / "plugin.json").exists():
+            return candidate
+    return script.parents[1]
 
 
 def _read_json(path: Path) -> dict:
@@ -55,7 +67,7 @@ def _check_http(url: str) -> dict[str, object]:
 
 def check(cwd: Path) -> dict[str, object]:
     repo = _repo_root()
-    plugin_root = repo / "plugins" / "tep"
+    plugin_root = _plugin_root()
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     hooks_path = plugin_root / "hooks.json"
     skill_path = plugin_root / "skills" / "tep" / "SKILL.md"
@@ -72,7 +84,7 @@ def check(cwd: Path) -> dict[str, object]:
 
     if manifest_path.exists():
         manifest = _read_json(manifest_path)
-        add("plugin_manifest", manifest.get("name") == "tep", str(manifest_path))
+        add("plugin_manifest", manifest.get("name") in {"tep", "trust-evidence-protocol"}, str(manifest_path))
         add("manifest_hooks_field", manifest.get("hooks") == "./hooks.json", str(manifest.get("hooks")))
         add("manifest_skills_field", manifest.get("skills") == "./skills/", str(manifest.get("skills")))
     else:
@@ -96,9 +108,22 @@ def check(cwd: Path) -> dict[str, object]:
         marketplaces = config.get("marketplaces", {})
         tep_market = marketplaces.get("tep-local")
         tep_plugin = plugins.get("tep@tep-local")
+        tep_home_plugin = plugins.get("tep@home-local-plugins")
+        tep_compat_plugin = plugins.get("trust-evidence-protocol@home-local-plugins")
         add("codex_hooks_feature", features.get("codex_hooks") is True, "features.codex_hooks")
-        add("tep_marketplace", isinstance(tep_market, dict) and tep_market.get("source") == str(repo), str(tep_market))
-        add("tep_plugin_enabled", isinstance(tep_plugin, dict) and tep_plugin.get("enabled") is True, str(tep_plugin))
+        add(
+            "tep_marketplace",
+            isinstance(tep_market, dict) and Path(str(tep_market.get("source", ""))).expanduser().exists(),
+            str(tep_market),
+        )
+        add(
+            "tep_plugin_enabled",
+            any(
+                isinstance(plugin, dict) and plugin.get("enabled") is True
+                for plugin in (tep_plugin, tep_home_plugin, tep_compat_plugin)
+            ),
+            str({"tep-local": tep_plugin, "home-local": tep_home_plugin, "compat": tep_compat_plugin}),
+        )
     else:
         add("codex_config", False, str(config_path), repair="Create or repair ~/.codex/config.toml.")
 
