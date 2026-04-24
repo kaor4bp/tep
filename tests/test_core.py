@@ -1461,6 +1461,13 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 init_project_pointer(project_root, tep_home=tep_home, name="duplicate")
 
+            rebound = init_project_pointer(project_root, tep_home=tep_home, name="duplicate", force=True)
+            self.assertEqual(rebound["project"]["id"], pointer.project_ref)
+            self.assertEqual(len(TEPHome(tep_home).projects()), 1)
+
+            with self.assertRaises(ValidationError):
+                TEPHome(tep_home).register_project("duplicate-root", roots=[str(project_root)])
+
     def test_init_project_pointer_can_bind_existing_project_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"

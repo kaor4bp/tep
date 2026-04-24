@@ -99,12 +99,17 @@ class TEPHome:
         status: str = "active",
     ) -> dict[str, Any]:
         self.ensure()
+        normalized_roots = [str(Path(root).expanduser().resolve()) for root in roots or []]
+        for root in normalized_roots:
+            existing = self.find_project_by_root(root)
+            if existing is not None:
+                raise ValidationError(f"duplicate_project:{existing['id']}")
         project_ref = new_id("PRJ")
         record = {
             "id": project_ref,
             "record_type": "project",
             "name": name,
-            "roots": roots or [],
+            "roots": normalized_roots,
             "aliases": aliases or [],
             "status": status,
             "created_at": utc_now(),
@@ -112,6 +117,18 @@ class TEPHome:
         }
         self._write_json(self.project_path(project_ref), record)
         return record
+
+    def projects(self) -> list[dict[str, Any]]:
+        self.ensure()
+        return [read_json(path) for path in sorted((self.root / "registry" / "projects").glob("PRJ-*.json"))]
+
+    def find_project_by_root(self, root: str | os.PathLike[str]) -> dict[str, Any] | None:
+        normalized = str(Path(root).expanduser().resolve())
+        for project in self.projects():
+            project_roots = [str(Path(item).expanduser().resolve()) for item in project.get("roots", [])]
+            if normalized in project_roots:
+                return project
+        return None
 
     def read_project(self, project_ref: str) -> dict[str, Any]:
         return read_json(self.project_path(project_ref))

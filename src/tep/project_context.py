@@ -60,7 +60,9 @@ def init_project_pointer(
     root = Path(project_root).expanduser().resolve()
     store = TEPHome(tep_home)
     if project_ref is None:
-        project = store.register_project(name or root.name, roots=[str(root)])
+        project = store.find_project_by_root(root)
+        if project is None:
+            project = store.register_project(name or root.name, roots=[str(root)])
         project_ref = project["id"]
     else:
         project = store.read_project(project_ref)
