@@ -1,6 +1,6 @@
 {
   "name": "tep",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Codex integration guidance for Trust Evidence Protocol local fact ledgers.",
   "author": {
     "name": "TEP contributors",
@@ -17,6 +17,7 @@
   ],
   "skills": "./skills/",
   "hooks": "./hooks.json",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Trust Evidence Protocol",
     "shortDescription": "Use TEP fact storage, sources, probes, and sealed reasoning ledgers.",

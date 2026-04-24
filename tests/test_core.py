@@ -20,6 +20,7 @@ from tep import (
 from tep.crypto import public_key_from_private
 from tep.errors import CanonicalJSONError, OwnershipError, ValidationError
 from tep.jsoncanon import bytes_hash, canonical_dumps
+from tep.mcp_stdio_server import TEPMCPStdioServer
 
 
 class CoreTests(unittest.TestCase):
@@ -1396,6 +1397,44 @@ class CoreTests(unittest.TestCase):
             unknown = app.handle_line(json.dumps({"method": "raw_json_write"}))
             self.assertFalse(unknown["ok"])
             self.assertEqual(unknown["error"]["code"], "unknown_method")
+
+    def test_mcp_stdio_server_exposes_jsonrpc_tool_api(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = TEPMCPStdioServer(MCPAdapter(Runtime(TEPHome(tmp))))
+
+            initialized = server.handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.0")
+
+            tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            tool_names = {tool["name"] for tool in tools["result"]["tools"]}
+            self.assertIn("generate_agent_identity", tool_names)
+            self.assertIn("append_ledger", tool_names)
+
+            called = server.handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "generate_agent_identity", "arguments": {"agent_name": "mcp-check"}},
+                }
+            )
+            self.assertFalse(called["result"]["isError"])
+            payload = json.loads(called["result"]["content"][0]["text"])
+            self.assertTrue(payload["ok"])
+            self.assertTrue(payload["data"]["agent_ref"].startswith("AGENT-"))
+
+            unknown = server.handle_message(
+                {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "raw_json_write"}}
+            )
+            self.assertTrue(unknown["result"]["isError"])
 
     def test_init_project_pointer_registers_project_and_writes_dot_tep(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

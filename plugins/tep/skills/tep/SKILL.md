@@ -30,14 +30,18 @@ Prefer HTTP when `mcp_server` is an HTTP URL:
 - `GET /tools`
 - `POST /call` with `{"name":"tool_name","arguments":{...}}`
 
-For local JSONL stdio transport, send:
+For Codex MCP integration, prefer the plugin MCP server `tep`, backed by
+`tep-mcp`. It exposes the same typed tools through MCP `tools/list` and
+`tools/call`.
+
+For local JSONL debug transport, send:
 
 ```json
 {"method":"tools/list"}
 {"method":"tools/call","params":{"name":"tool_name","arguments":{}}}
 ```
 
-The transport is a thin wrapper over typed tools. Do not edit `~/.tep` files
+Both transports are thin wrappers over typed tools. Do not edit `~/.tep` files
 directly and do not invent raw JSON mutation paths.
 
 ## Session Start

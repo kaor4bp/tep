@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tep": {
+      "command": "./scripts/tep-mcp-dev.sh",
+      "args": []
+    }
+  }
+}

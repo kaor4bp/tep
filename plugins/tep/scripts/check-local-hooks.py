@@ -110,6 +110,8 @@ def check(cwd: Path) -> dict[str, object]:
         tep_plugin = plugins.get("tep@tep-local")
         tep_home_plugin = plugins.get("tep@home-local-plugins")
         tep_compat_plugin = plugins.get("trust-evidence-protocol@home-local-plugins")
+        mcp_servers = config.get("mcp_servers", {})
+        tep_mcp = mcp_servers.get("tep")
         add("codex_hooks_feature", features.get("codex_hooks") is True, "features.codex_hooks")
         add(
             "tep_marketplace",
@@ -118,12 +120,10 @@ def check(cwd: Path) -> dict[str, object]:
         )
         add(
             "tep_plugin_enabled",
-            any(
-                isinstance(plugin, dict) and plugin.get("enabled") is True
-                for plugin in (tep_plugin, tep_home_plugin, tep_compat_plugin)
-            ),
+            isinstance(tep_plugin, dict) and tep_plugin.get("enabled") is True,
             str({"tep-local": tep_plugin, "home-local": tep_home_plugin, "compat": tep_compat_plugin}),
         )
+        add("tep_mcp_enabled", isinstance(tep_mcp, dict) and tep_mcp.get("enabled") is True, str(tep_mcp))
     else:
         add("codex_config", False, str(config_path), repair="Create or repair ~/.codex/config.toml.")
 
