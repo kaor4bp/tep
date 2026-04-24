@@ -1,0 +1,38 @@
+{
+  "name": "tep",
+  "version": "0.1.0",
+  "description": "Codex integration guidance for Trust Evidence Protocol local fact ledgers.",
+  "author": {
+    "name": "TEP contributors",
+    "url": "https://github.com/kaor4bp/tep"
+  },
+  "homepage": "https://github.com/kaor4bp/tep",
+  "repository": "https://github.com/kaor4bp/tep",
+  "license": "MIT",
+  "keywords": [
+    "facts",
+    "ledger",
+    "agents",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Trust Evidence Protocol",
+    "shortDescription": "Use TEP fact storage, sources, probes, and sealed reasoning ledgers.",
+    "longDescription": "Guides Codex agents to use Trust Evidence Protocol as a local fact memory: capture inputs and command observations, ingest files as sources, maintain agent-owned sealed ledgers, run ACT-gated probes, and ask TEP for valid next operations instead of writing raw JSON.",
+    "developerName": "TEP contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Local tools",
+      "Fact memory",
+      "Reasoning ledger"
+    ],
+    "websiteURL": "https://github.com/kaor4bp/tep",
+    "defaultPrompt": [
+      "Start a TEP-backed agent session for this workspace.",
+      "Capture this document as a TEP source and extract supported claims.",
+      "Validate the current TEP ledger before finalizing the task."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

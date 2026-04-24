@@ -1,0 +1,20 @@
+{
+  "name": "tep-local",
+  "interface": {
+    "displayName": "TEP Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "tep",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tep"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
