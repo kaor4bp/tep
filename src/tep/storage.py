@@ -49,11 +49,11 @@ class TEPHome:
         for path in [
             self.root / "registry" / "projects",
             self.root / "registry" / "workspaces",
-            self.root / "records" / "src",
-            self.root / "records" / "clm",
+            self.root / "records" / "sources",
+            self.root / "records" / "claims",
         ]:
             path.mkdir(parents=True, exist_ok=True)
-        (self.root / "records" / "src" / "source_events.jsonl").touch(exist_ok=True)
+        (self.root / "records" / "sources" / "source_events.jsonl").touch(exist_ok=True)
 
     def begin_transaction(self, operation: str) -> FileTransaction:
         self.ensure()
@@ -436,22 +436,40 @@ class TEPHome:
         path = self.source_path(workspace_ref, source_ref)
         if path.exists():
             return read_json(path)
+        legacy_global = self._legacy_global_source_path(source_ref)
+        if legacy_global.exists():
+            return read_json(legacy_global)
+        workspace_named = self._workspace_source_path(workspace_ref, source_ref)
+        if workspace_named.exists():
+            return read_json(workspace_named)
         legacy = self._legacy_source_path(workspace_ref, source_ref)
         if legacy.exists():
             return read_json(legacy)
         return read_json(path)
 
     def source_path(self, workspace_ref: str, source_ref: str) -> Path:
+        return self._record_path("sources", source_ref)
+
+    def _legacy_global_source_path(self, source_ref: str) -> Path:
         return self._record_path("src", source_ref)
 
     def _legacy_source_path(self, workspace_ref: str, source_ref: str) -> Path:
         return self.workspace_dir(workspace_ref) / "records" / "src" / f"{source_ref}.json"
 
+    def _workspace_source_path(self, workspace_ref: str, source_ref: str) -> Path:
+        return self.workspace_dir(workspace_ref) / "records" / "sources" / f"{source_ref}.json"
+
     def source_events_path(self, workspace_ref: str) -> Path:
+        workspace_named = self.workspace_dir(workspace_ref) / "records" / "sources" / "source_events.jsonl"
+        if workspace_named.exists() and workspace_named.stat().st_size > 0:
+            return workspace_named
         legacy = self.workspace_dir(workspace_ref) / "records" / "src" / "source_events.jsonl"
         if legacy.exists() and legacy.stat().st_size > 0:
             return legacy
-        return self.records_dir() / "src" / "source_events.jsonl"
+        legacy_global = self.records_dir() / "src" / "source_events.jsonl"
+        if legacy_global.exists() and legacy_global.stat().st_size > 0:
+            return legacy_global
+        return self.records_dir() / "sources" / "source_events.jsonl"
 
     def source_events(self, workspace_ref: str) -> list[dict[str, Any]]:
         return self.read_jsonl(self.source_events_path(workspace_ref))
@@ -463,7 +481,13 @@ class TEPHome:
         return None
 
     def sources(self, workspace_ref: str) -> list[dict[str, Any]]:
-        records = [read_json(path) for path in sorted((self.records_dir() / "src").glob("**/SRC-*.json"))]
+        records = [read_json(path) for path in sorted((self.records_dir() / "sources").glob("**/SRC-*.json"))]
+        legacy_global = self.records_dir() / "src"
+        if legacy_global.exists():
+            records.extend(read_json(path) for path in sorted(legacy_global.glob("**/SRC-*.json")))
+        workspace_named = self.workspace_dir(workspace_ref) / "records" / "sources"
+        if workspace_named.exists():
+            records.extend(read_json(path) for path in sorted(workspace_named.glob("SRC-*.json")))
         legacy_dir = self.workspace_dir(workspace_ref) / "records" / "src"
         if legacy_dir.exists():
             records.extend(read_json(path) for path in sorted(legacy_dir.glob("SRC-*.json")))
@@ -675,23 +699,41 @@ class TEPHome:
         path = self.claim_path(workspace_ref, claim_ref)
         if path.exists():
             return read_json(path)
+        legacy_global = self._legacy_global_claim_path(claim_ref)
+        if legacy_global.exists():
+            return read_json(legacy_global)
+        workspace_named = self._workspace_claim_path(workspace_ref, claim_ref)
+        if workspace_named.exists():
+            return read_json(workspace_named)
         legacy = self._legacy_claim_path(workspace_ref, claim_ref)
         if legacy.exists():
             return read_json(legacy)
         return read_json(path)
 
     def claims(self, workspace_ref: str) -> list[dict[str, Any]]:
-        records = [read_json(path) for path in sorted((self.records_dir() / "clm").glob("**/CLM-*.json"))]
+        records = [read_json(path) for path in sorted((self.records_dir() / "claims").glob("**/CLM-*.json"))]
+        legacy_global = self.records_dir() / "clm"
+        if legacy_global.exists():
+            records.extend(read_json(path) for path in sorted(legacy_global.glob("**/CLM-*.json")))
+        workspace_named = self.workspace_dir(workspace_ref) / "records" / "claims"
+        if workspace_named.exists():
+            records.extend(read_json(path) for path in sorted(workspace_named.glob("CLM-*.json")))
         legacy_dir = self.workspace_dir(workspace_ref) / "records" / "clm"
         if legacy_dir.exists():
             records.extend(read_json(path) for path in sorted(legacy_dir.glob("CLM-*.json")))
         return [claim for claim in self._dedupe_records(records) if self.claim_visible_in_workspace(workspace_ref, claim)]
 
     def claim_path(self, workspace_ref: str, claim_ref: str) -> Path:
+        return self._record_path("claims", claim_ref)
+
+    def _legacy_global_claim_path(self, claim_ref: str) -> Path:
         return self._record_path("clm", claim_ref)
 
     def _legacy_claim_path(self, workspace_ref: str, claim_ref: str) -> Path:
         return self.workspace_dir(workspace_ref) / "records" / "clm" / f"{claim_ref}.json"
+
+    def _workspace_claim_path(self, workspace_ref: str, claim_ref: str) -> Path:
+        return self.workspace_dir(workspace_ref) / "records" / "claims" / f"{claim_ref}.json"
 
     def claim_visible_in_workspace(self, workspace_ref: str, claim: dict[str, Any]) -> bool:
         scope = claim.get("scope", {})

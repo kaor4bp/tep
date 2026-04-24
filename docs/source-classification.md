@@ -79,7 +79,7 @@ support commitment. A low-trust source may still be useful for curiosity and
 probe planning.
 
 For commitment gates, accepted status must replay through
-`records/src/source_events.jsonl`. A mutable `SRC-*` field is only a lookup
+`records/sources/source_events.jsonl`. A mutable `SRC-*` field is only a lookup
 cache; it is not enough to prove acceptance. Source events are append-only and
 hash-chained, and ledger rows snapshot the accepted event hash when that source
 supports a committed claim.

@@ -65,9 +65,9 @@ Canonical:
 
 - `registry/projects/PRJ-*.json`
 - `registry/workspaces/WSP-*.json`
-- `records/src/YYYY/MM/SRC-*.json`
-- `records/src/source_events.jsonl`
-- `records/clm/YYYY/MM/CLM-*.json`
+- `records/sources/YYYY/MM/SRC-*.json`
+- `records/sources/source_events.jsonl`
+- `records/claims/YYYY/MM/CLM-*.json`
 - `workspaces/WSP-*/memberships/projects.jsonl`
 - `workspaces/WSP-*/records/inp/INP-*.json`
 - `workspaces/WSP-*/records/run/RUN-*.json`
@@ -183,7 +183,7 @@ Visibility rules:
 - A bridge relation cannot be created, even as a hypothesis, unless both sides'
   project scopes are visible in the current workspace.
 
-Agents must not scan `records/clm` directly. Retrieval goes through MCP lookup,
+Agents must not scan `records/claims` directly. Retrieval goes through MCP lookup,
 runtime scope views, and indexes so policy can filter over-retrieved backend
 candidates before commitment.
 

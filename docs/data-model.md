@@ -80,7 +80,7 @@ Runtime, not the agent, applies these transitions. MCP may expose
 reason, actor, timestamp, and policy basis.
 
 Acceptance/classification changes append an event to
-`records/src/source_events.jsonl`:
+`records/sources/source_events.jsonl`:
 
 ```json
 {

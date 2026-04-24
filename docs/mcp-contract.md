@@ -455,7 +455,7 @@ provenance metadata, not source truth. Failed classification writes nothing.
 `accept_source`
 : Runtime operation that marks a captured `SRC-*` accepted under source
 acceptance policy. It records reason, actor, timestamp, policy basis, and a
-source audit event in `records/src/source_events.jsonl`.
+source audit event in `records/sources/source_events.jsonl`.
 
 `reject_source`
 : Runtime operation that marks a captured `SRC-*` rejected and appends a source

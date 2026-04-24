@@ -906,7 +906,7 @@ class CoreTests(unittest.TestCase):
             lookup = runtime.lookup_facts(second_workspace["id"], query="retry")
             self.assertTrue(lookup.ok, lookup.error)
             self.assertIn(claim["id"], {item["record_ref"] for item in lookup.data["results"]})
-            self.assertTrue(str(store.claim_path(first_workspace["id"], claim["id"])).startswith(str(Path(tmp) / "records" / "clm")))
+            self.assertTrue(str(store.claim_path(first_workspace["id"], claim["id"])).startswith(str(Path(tmp) / "records" / "claims")))
 
     def test_legacy_workspace_claim_and_source_paths_still_replay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -931,14 +931,28 @@ class CoreTests(unittest.TestCase):
             ledger = Ledger(store, workspace["id"], identity.agent_ref)
             ledger.append_claim(private_key=identity.private_key, claim_ref=claim["id"], why="Snapshot before path migration.", difficulty_bits=8)
 
-            legacy_source = store._legacy_source_path(workspace["id"], source["id"])
-            legacy_claim = store._legacy_claim_path(workspace["id"], claim["id"])
-            legacy_events = store.workspace_dir(workspace["id"]) / "records" / "src" / "source_events.jsonl"
+            legacy_source = store._legacy_global_source_path(source["id"])
+            legacy_claim = store._legacy_global_claim_path(claim["id"])
+            legacy_events = store.records_dir() / "src" / "source_events.jsonl"
             legacy_source.parent.mkdir(parents=True, exist_ok=True)
             legacy_claim.parent.mkdir(parents=True, exist_ok=True)
+            legacy_events.parent.mkdir(parents=True, exist_ok=True)
             store.source_path(workspace["id"], source["id"]).rename(legacy_source)
             store.claim_path(workspace["id"], claim["id"]).rename(legacy_claim)
-            store.records_dir().joinpath("src", "source_events.jsonl").rename(legacy_events)
+            store.records_dir().joinpath("sources", "source_events.jsonl").rename(legacy_events)
+
+            validation = ledger.validate()
+            self.assertTrue(validation.ok, validation.errors)
+
+            workspace_source = store._workspace_source_path(workspace["id"], source["id"])
+            workspace_claim = store._workspace_claim_path(workspace["id"], claim["id"])
+            workspace_events = store.workspace_dir(workspace["id"]) / "records" / "sources" / "source_events.jsonl"
+            workspace_source.parent.mkdir(parents=True, exist_ok=True)
+            workspace_claim.parent.mkdir(parents=True, exist_ok=True)
+            workspace_events.parent.mkdir(parents=True, exist_ok=True)
+            legacy_source.rename(workspace_source)
+            legacy_claim.rename(workspace_claim)
+            legacy_events.rename(workspace_events)
 
             validation = ledger.validate()
             self.assertTrue(validation.ok, validation.errors)
@@ -1615,7 +1629,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.2")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.3")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
