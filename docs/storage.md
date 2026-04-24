@@ -12,21 +12,14 @@ TEP v1 stores user data under `~/.tep`.
   runtime/
     tx/TX-*/
   records/
-    src/YYYY/MM/SRC-*.json
-    src/source_events.jsonl
-    clm/YYYY/MM/CLM-*.json
-  workspaces/WSP-*/
-    memberships/projects.jsonl
-    records/inp/INP-*.json
-    records/run/RUN-*.json
-    tasks/TASK-*.json
-    agents/AGENT-*/agent.json
-    agents/AGENT-*/ledger.jsonl
+    sources/YYYY/MM/SRC-*.json
+    sources/source_events.jsonl
+    claims/YYYY/MM/CLM-*.json
     maps/MAP-*.json
     maps/tap.jsonl
     maps/views/
     indexes/
-      manifests/IDX-*.json
+      manifests/WSP-*/IDX-*.json
       trust_score/
       source_trust/
       claim_graph/
@@ -36,6 +29,13 @@ TEP v1 stores user data under `~/.tep`.
       map_coverage/
       tap_heat/
       coco/CIX-*.json
+  workspaces/WSP-*/
+    memberships/projects.jsonl
+    records/inp/INP-*.json
+    records/run/RUN-*.json
+    tasks/TASK-*.json
+    agents/AGENT-*/agent.json
+    agents/AGENT-*/ledger.jsonl
     artifacts/
 ```
 
@@ -77,8 +77,8 @@ Canonical:
 
 Canonical navigation:
 
-- `workspaces/WSP-*/maps/MAP-*.json`
-- `workspaces/WSP-*/maps/tap.jsonl`
+- `records/maps/MAP-*.json`
+- `records/maps/tap.jsonl`
 
 Runtime-private:
 
@@ -90,20 +90,20 @@ Runtime-private:
 
 Generated or rebuildable:
 
-- `maps/views/`
-- `indexes/`
+- `records/maps/views/`
+- `records/indexes/`
 - generated reports
 - backend projections
-- `indexes/manifests/IDX-*.json`
-- `indexes/trust_score/`
-- `indexes/source_trust/`
-- `indexes/claim_graph/`
-- `indexes/source_acceptance/`
-- `indexes/dedup/`
-- `indexes/ledger_heads/`
-- `indexes/map_coverage/`
-- `indexes/tap_heat/`
-- `indexes/coco/CIX-*.json`
+- `records/indexes/manifests/WSP-*/IDX-*.json`
+- `records/indexes/trust_score/`
+- `records/indexes/source_trust/`
+- `records/indexes/claim_graph/`
+- `records/indexes/source_acceptance/`
+- `records/indexes/dedup/`
+- `records/indexes/ledger_heads/`
+- `records/indexes/map_coverage/`
+- `records/indexes/tap_heat/`
+- `records/indexes/coco/CIX-*.json`
 
 Artifact storage:
 

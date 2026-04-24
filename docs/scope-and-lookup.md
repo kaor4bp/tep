@@ -36,10 +36,10 @@ Minimal fields:
 
 ## Workspaces
 
-`WSP-*` is a durable working scope. It owns tasks, agent threads, maps, indexes,
-artifacts, and project memberships. It does not physically own `SRC-*` or
-`CLM-*`; those records are global and become visible through workspace/project
-scope policy.
+`WSP-*` is a durable working scope. It owns tasks, agent threads, artifacts,
+and project memberships. It does not physically own `SRC-*`, `CLM-*`, `MAP-*`,
+or `IDX-*`; those records are global and become visible through
+workspace/project scope policy.
 
 Project membership row:
 

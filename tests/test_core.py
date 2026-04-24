@@ -1399,6 +1399,8 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(trust_rows[0]["claim_ref"], claim["id"])
             self.assertEqual(trust_rows[0]["derived_label"], "trusted_fact")
             self.assertEqual(store.read_index_manifest(workspace["id"], "source_class")["rows"][0]["source_ref"], source["id"])
+            self.assertTrue(str(store.index_manifest_path(workspace["id"], "source_class")).startswith(str(Path(tmp) / "records" / "indexes")))
+            self.assertFalse((Path(tmp) / "workspaces" / workspace["id"] / "indexes" / "manifests" / "source_class.json").exists())
 
     def test_mcp_adapter_lists_and_dispatches_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1629,7 +1631,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.3")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.4")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}

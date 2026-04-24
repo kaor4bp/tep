@@ -51,6 +51,8 @@ class TEPHome:
             self.root / "registry" / "workspaces",
             self.root / "records" / "sources",
             self.root / "records" / "claims",
+            self.root / "records" / "maps",
+            self.root / "records" / "indexes" / "manifests",
         ]:
             path.mkdir(parents=True, exist_ok=True)
         (self.root / "records" / "sources" / "source_events.jsonl").touch(exist_ok=True)
@@ -68,8 +70,6 @@ class TEPHome:
             workspace / "records" / "run",
             workspace / "tasks",
             workspace / "agents",
-            workspace / "maps",
-            workspace / "indexes" / "manifests",
             workspace / "artifacts",
         ]:
             path.mkdir(parents=True, exist_ok=True)
@@ -952,10 +952,25 @@ class TEPHome:
         return manifest
 
     def read_index_manifest(self, workspace_ref: str, index_name: str) -> dict[str, Any]:
-        return read_json(self.index_manifest_path(workspace_ref, index_name))
+        path = self.index_manifest_path(workspace_ref, index_name)
+        if path.exists():
+            return read_json(path)
+        legacy = self._legacy_index_manifest_path(workspace_ref, index_name)
+        if legacy.exists():
+            return read_json(legacy)
+        return read_json(path)
 
     def index_manifest_path(self, workspace_ref: str, index_name: str) -> Path:
+        return self.records_dir() / "indexes" / "manifests" / workspace_ref / f"{index_name}.json"
+
+    def _legacy_index_manifest_path(self, workspace_ref: str, index_name: str) -> Path:
         return self.workspace_dir(workspace_ref) / "indexes" / "manifests" / f"{index_name}.json"
+
+    def maps_dir(self, workspace_ref: str | None = None) -> Path:
+        return self.records_dir() / "maps" if workspace_ref is None else self.records_dir() / "maps" / workspace_ref
+
+    def legacy_maps_dir(self, workspace_ref: str) -> Path:
+        return self.workspace_dir(workspace_ref) / "maps"
 
     def task_path_refs(self, workspace_ref: str, task_ref: str) -> list[str]:
         refs = []

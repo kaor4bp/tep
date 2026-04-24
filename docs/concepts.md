@@ -6,7 +6,7 @@ This document defines the public vocabulary for TEP v1.
 
 | Object | Role | Proof posture |
 | --- | --- | --- |
-| `WSP-*` | Workspace knowledge scope. Holds shared domain facts, tasks, maps, indexes, artifacts, and project memberships. | Scope only. |
+| `WSP-*` | Workspace working scope. Holds tasks, agents, artifacts, and project memberships; views shared facts, maps, and indexes through scope policy. | Scope only. |
 | `PRJ-*` | Global project/repository/service registry entry. Independent from workspaces. | Scope and provenance context only. |
 | `AGENT-*` | One live agent thread/session with owner public key, selected focus, working context, task attachments, curiosity position, and ledger path. | Runtime authority for appends. |
 | `TASK-*` | Durable recursive work item with goal, scope, blockers, done criteria, and optional child tasks. Any task can be split into subtasks. | Coordination only. |
