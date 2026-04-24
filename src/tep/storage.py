@@ -80,6 +80,7 @@ class TEPHome:
             "id": workspace_ref,
             "record_type": "workspace",
             "name": name,
+            "status": "active",
             "created_at": utc_now(),
             "updated_at": utc_now(),
         }
@@ -89,6 +90,17 @@ class TEPHome:
 
     def read_workspace(self, workspace_ref: str) -> dict[str, Any]:
         return read_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json")
+
+    def update_workspace(self, workspace_ref: str, record: dict[str, Any]) -> dict[str, Any]:
+        record["updated_at"] = utc_now()
+        self._write_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json", record)
+        return record
+
+    def archive_workspace(self, workspace_ref: str, *, reason: str) -> dict[str, Any]:
+        workspace = self.read_workspace(workspace_ref)
+        workspace["status"] = "archived"
+        workspace["archive_reason"] = reason
+        return self.update_workspace(workspace_ref, workspace)
 
     def register_project(
         self,
@@ -102,7 +114,7 @@ class TEPHome:
         normalized_roots = [str(Path(root).expanduser().resolve()) for root in roots or []]
         for root in normalized_roots:
             existing = self.find_project_by_root(root)
-            if existing is not None:
+            if existing is not None and existing.get("status") != "archived":
                 raise ValidationError(f"duplicate_project:{existing['id']}")
         project_ref = new_id("PRJ")
         record = {
@@ -124,17 +136,32 @@ class TEPHome:
 
     def find_project_by_root(self, root: str | os.PathLike[str]) -> dict[str, Any] | None:
         normalized = str(Path(root).expanduser().resolve())
+        archived_match: dict[str, Any] | None = None
         for project in self.projects():
             project_roots = [str(Path(item).expanduser().resolve()) for item in project.get("roots", [])]
             if normalized in project_roots:
-                return project
-        return None
+                if project.get("status") != "archived":
+                    return project
+                if archived_match is None:
+                    archived_match = project
+        return archived_match
 
     def read_project(self, project_ref: str) -> dict[str, Any]:
         return read_json(self.project_path(project_ref))
 
     def project_path(self, project_ref: str) -> Path:
         return self.root / "registry" / "projects" / f"{project_ref}.json"
+
+    def update_project(self, project_ref: str, record: dict[str, Any]) -> dict[str, Any]:
+        record["updated_at"] = utc_now()
+        self._write_json(self.project_path(project_ref), record)
+        return record
+
+    def archive_project(self, project_ref: str, *, reason: str) -> dict[str, Any]:
+        project = self.read_project(project_ref)
+        project["status"] = "archived"
+        project["archive_reason"] = reason
+        return self.update_project(project_ref, project)
 
     def project_registry_search(self, query: str | None = None) -> list[dict[str, Any]]:
         self.ensure()

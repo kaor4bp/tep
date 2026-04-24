@@ -53,9 +53,17 @@ class MCPAdapter:
                 MCPToolSpec("create_workspace", "scope", True, "Create a local WSP-* context.", ("name",)),
                 self._create_workspace,
             ),
+            "archive_workspace": (
+                MCPToolSpec("archive_workspace", "scope", True, "Archive a WSP-* registry record.", ("workspace_ref", "reason")),
+                self._archive_workspace,
+            ),
             "attach_project_to_workspace": (
                 MCPToolSpec("attach_project_to_workspace", "scope", True, "Attach PRJ-* to WSP-* by role.", ("workspace_ref", "project_ref", "role", "reason")),
                 self._attach_project_to_workspace,
+            ),
+            "archive_project": (
+                MCPToolSpec("archive_project", "scope", True, "Archive a PRJ-* registry record.", ("project_ref", "reason")),
+                self._archive_project,
             ),
             "create_task": (
                 MCPToolSpec("create_task", "task", True, "Create a TASK-*.", ("workspace_ref", "goal")),
@@ -226,8 +234,14 @@ class MCPAdapter:
     def _create_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.create_workspace(args["name"])
 
+    def _archive_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.archive_workspace(args["workspace_ref"], reason=args["reason"])
+
     def _attach_project_to_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.attach_project_to_workspace(args["workspace_ref"], args["project_ref"], role=args["role"], reason=args["reason"])
+
+    def _archive_project(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.archive_project(args["project_ref"], reason=args["reason"])
 
     def _create_task(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.create_task(

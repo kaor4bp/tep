@@ -80,6 +80,22 @@ class Runtime:
             )
         )
 
+    def archive_workspace(self, workspace_ref: str, *, reason: str) -> RuntimeResponse:
+        return self._guard(
+            lambda: ok_response(
+                {"workspace": self.store.archive_workspace(workspace_ref, reason=reason)},
+                valid_moves=[move("detail", "record_detail", "Inspect archived workspace metadata.")],
+            )
+        )
+
+    def archive_project(self, project_ref: str, *, reason: str) -> RuntimeResponse:
+        return self._guard(
+            lambda: ok_response(
+                {"project": self.store.archive_project(project_ref, reason=reason)},
+                valid_moves=[move("lookup", "project_registry_search", "Confirm active project registry state.")],
+            )
+        )
+
     def attach_project_to_workspace(self, workspace_ref: str, project_ref: str, *, role: str, reason: str) -> RuntimeResponse:
         return self._guard(
             lambda: ok_response(

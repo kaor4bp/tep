@@ -1411,7 +1411,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.0")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.1")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -1467,6 +1467,18 @@ class CoreTests(unittest.TestCase):
 
             with self.assertRaises(ValidationError):
                 TEPHome(tep_home).register_project("duplicate-root", roots=[str(project_root)])
+
+            archived_project = TEPHome(tep_home).archive_project(pointer.project_ref, reason="cleanup duplicate registration test")
+            self.assertEqual(archived_project["status"], "archived")
+            self.assertEqual(archived_project["archive_reason"], "cleanup duplicate registration test")
+            replacement = TEPHome(tep_home).register_project("replacement", roots=[str(project_root)])
+            self.assertNotEqual(replacement["id"], pointer.project_ref)
+            self.assertEqual(TEPHome(tep_home).find_project_by_root(project_root)["id"], replacement["id"])
+
+            workspace = TEPHome(tep_home).create_workspace("scratch")
+            archived_workspace = TEPHome(tep_home).archive_workspace(workspace["id"], reason="cleanup empty workspace")
+            self.assertEqual(archived_workspace["status"], "archived")
+            self.assertEqual(archived_workspace["archive_reason"], "cleanup empty workspace")
 
     def test_init_project_pointer_can_bind_existing_project_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
