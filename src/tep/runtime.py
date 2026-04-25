@@ -111,13 +111,26 @@ class Runtime:
             )
         )
 
-    def create_workspace(self, name: str) -> RuntimeResponse:
-        return self._guard(
-            lambda: ok_response(
-                {"workspace": self.store.create_workspace(name)},
+    def create_workspace(self, name: str, *, project_ref: str | None = None, role: str = "primary", reason: str = "workspace resolved by create_workspace") -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            if project_ref:
+                existing = self.store.active_workspaces_for_project(project_ref)
+                if existing:
+                    return ok_response(
+                        {"workspace": existing[0], "reused": True, "project_ref": project_ref},
+                        valid_moves=[move("mutate_record", "create_task", "Create or resume a task in this workspace.", writes=True)],
+                    )
+            existing_by_name = self.store.active_workspace_by_name(name)
+            workspace = self.store.create_workspace(name)
+            reused = existing_by_name is not None and existing_by_name.get("id") == workspace.get("id")
+            if project_ref and project_ref not in self.store.visible_project_refs(workspace["id"]):
+                self.store.attach_project_to_workspace(workspace["id"], project_ref, role=role, reason=reason)
+            return ok_response(
+                {"workspace": workspace, "reused": reused, "project_ref": project_ref},
                 valid_moves=[move("mutate_record", "attach_project_to_workspace", "Attach one or more projects.", writes=True)],
             )
-        )
+
+        return self._guard(op)
 
     def archive_workspace(self, workspace_ref: str, *, reason: str) -> RuntimeResponse:
         return self._guard(

@@ -66,6 +66,11 @@ At the beginning of a TEP-backed task:
 10. If a task is active, check `compiled_context.execution_state`. Do not work
     on the task until all required `CTX-*` packs exist.
 
+Do not create a new `WSP-*` just because a new agent session starts. Reuse the
+workspace already attached to the local `.tep` `project_ref`; when calling
+`create_workspace`, pass `project_ref` so TEP can return the existing workspace
+instead of creating a duplicate.
+
 `AGENT-*` is a live thread/session, not a reusable personality. Do not continue
 another agent's ledger with this thread's key. Foreign ledgers are readable for
 coordination but appendable only by their owner identity.
@@ -73,8 +78,11 @@ coordination but appendable only by their owner identity.
 The plugin ships Codex hook adapters for `SessionStart`, `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse`, and `Stop`. Hooks are conservative: they check
 visibility, block direct `.tep` writes, best-effort capture prompts and Bash
-runs through HTTP or local stdio fallback, and apply enforcement settings before
-Bash execution. Explicit MCP/tool calls remain the reliable path.
+runs through HTTP or local stdio fallback, create audited command observation
+claims from Bash results, and apply enforcement settings before Bash execution.
+Explicit MCP/tool calls remain the reliable path. Hooks cannot append sealed
+ledger rows without the current agent's in-memory private key; agents must still
+ledger support claims explicitly.
 
 ## Enforcement Settings
 

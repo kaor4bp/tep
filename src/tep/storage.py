@@ -111,7 +111,11 @@ class TEPHome:
         month = day[4:6] if day != "undated" else "00"
         return self.records_dir() / directory / year / month / f"{record_ref}.json"
 
-    def create_workspace(self, name: str, *, tx: FileTransaction | None = None) -> dict[str, Any]:
+    def create_workspace(self, name: str, *, tx: FileTransaction | None = None, allow_existing: bool = True) -> dict[str, Any]:
+        if allow_existing:
+            existing = self.active_workspace_by_name(name)
+            if existing is not None:
+                return existing
         workspace_ref = new_id("WSP")
         record = {
             "id": workspace_ref,
@@ -131,6 +135,42 @@ class TEPHome:
 
     def read_workspace(self, workspace_ref: str) -> dict[str, Any]:
         return read_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json")
+
+    def active_workspace_by_name(self, name: str) -> dict[str, Any] | None:
+        self.ensure()
+        for path in sorted((self.root / "registry" / "workspaces").glob("WSP-*.json")):
+            workspace = read_json(path)
+            if workspace.get("status") == "active" and workspace.get("name") == name:
+                return workspace
+        return None
+
+    def active_workspaces_for_project(self, project_ref: str) -> list[dict[str, Any]]:
+        self.ensure()
+        matches: list[tuple[str, int, dict[str, Any]]] = []
+        for path in sorted((self.root / "registry" / "workspaces").glob("WSP-*.json")):
+            workspace = read_json(path)
+            if workspace.get("status") == "archived":
+                continue
+            workspace_ref = workspace.get("id")
+            if not isinstance(workspace_ref, str) or not workspace_ref.startswith("WSP-"):
+                continue
+            memberships = self.read_jsonl(self.memberships_path(workspace_ref))
+            active_rows = [row for row in memberships if row.get("active") is True and row.get("project_ref") == project_ref]
+            if active_rows:
+                latest = max(str(row.get("added_at", "")) for row in active_rows)
+                try:
+                    mtime_ns = self.memberships_path(workspace_ref).stat().st_mtime_ns
+                except OSError:
+                    mtime_ns = 0
+                matches.append((latest, mtime_ns, workspace))
+        return [
+            workspace
+            for _latest, _mtime_ns, workspace in sorted(
+                matches,
+                key=lambda item: (item[0], item[1], item[2].get("created_at", ""), item[2].get("id", "")),
+                reverse=True,
+            )
+        ]
 
     def update_workspace(self, workspace_ref: str, record: dict[str, Any], *, tx: FileTransaction | None = None) -> dict[str, Any]:
         record["updated_at"] = utc_now()

@@ -52,7 +52,7 @@ class MCPAdapter:
                 self._register_project,
             ),
             "create_workspace": (
-                MCPToolSpec("create_workspace", "scope", True, "Create a local WSP-* context.", ("name",)),
+                MCPToolSpec("create_workspace", "scope", True, "Create or reuse a local WSP-* context.", ("name",), ("project_ref", "role", "reason")),
                 self._create_workspace,
             ),
             "archive_workspace": (
@@ -271,7 +271,7 @@ class MCPAdapter:
         )
 
     def _create_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
-        return self.runtime.create_workspace(args["name"])
+        return self.runtime.create_workspace(args["name"], project_ref=args.get("project_ref"), role=args.get("role", "primary"), reason=args.get("reason", "workspace resolved by MCP"))
 
     def _archive_workspace(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.archive_workspace(args["workspace_ref"], reason=args["reason"])

@@ -87,6 +87,18 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(bad.ok)
             self.assertIn("unsupported_enforcement_mode", bad.error["message"])
 
+    def test_create_workspace_reuses_existing_workspace_for_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            project = runtime.register_project("primary").data["project"]
+            first = runtime.create_workspace("primary-workspace", project_ref=project["id"])
+            second = runtime.create_workspace("another-agent-workspace", project_ref=project["id"])
+
+            self.assertTrue(first.ok, first.error)
+            self.assertTrue(second.ok, second.error)
+            self.assertEqual(first.data["workspace"]["id"], second.data["workspace"]["id"])
+            self.assertTrue(second.data["reused"])
+
     def test_context_packs_are_task_scoped_text_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -1642,6 +1654,49 @@ class CoreTests(unittest.TestCase):
             run = json.loads(runs[0].read_text(encoding="utf-8"))
             self.assertEqual(run["command"], "echo ok")
             self.assertEqual(run["exit_code"], 0)
+            claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
+            self.assertEqual(len(claims), 1)
+            claim = json.loads(claims[0].read_text(encoding="utf-8"))
+            self.assertIn("exited with code 0", claim["statement"])
+            self.assertEqual(claim["scope"]["project_refs"], [project["id"]])
+
+    def test_codex_hook_resolves_latest_workspace_when_project_has_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            first = store.create_workspace("workspace")
+            store.attach_project_to_workspace(first["id"], project["id"], role="primary", reason="old")
+            second = store.create_workspace("workspace-2")
+            store.attach_project_to_workspace(second["id"], project["id"], role="primary", reason="new")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            env["TEP_REPO_ROOT"] = str(Path(__file__).resolve().parents[1])
+            payload = {
+                "cwd": str(project_root),
+                "tool_input": {"command": "pytest -q"},
+                "tool_response": {"exit_code": 0, "stdout": "1 passed\n"},
+            }
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "post-bash"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(len(list((tep_home / "workspaces" / first["id"] / "records" / "run").glob("RUN-*.json"))), 0)
+            self.assertEqual(len(list((tep_home / "workspaces" / second["id"] / "records" / "run").glob("RUN-*.json"))), 1)
+            claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
+            self.assertEqual(len(claims), 1)
 
     def test_codex_hook_blocks_bash_when_strict_settings_require_act(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2211,7 +2266,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.9")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.10")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2270,7 +2325,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.9")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.10")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

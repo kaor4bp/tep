@@ -186,7 +186,7 @@ def project_ref_from_root(home: Path, cwd: str | None) -> str | None:
 def workspace_for_project(home: Path, project_ref: str | None) -> str | None:
     if not project_ref:
         return None
-    matches = []
+    matches: list[tuple[str, str, int, str]] = []
     for path in sorted((home / "registry" / "workspaces").glob("WSP-*.json")):
         workspace = read_json(path)
         if workspace.get("status") == "archived":
@@ -195,9 +195,19 @@ def workspace_for_project(home: Path, project_ref: str | None) -> str | None:
         if not isinstance(workspace_ref, str) or not workspace_ref.startswith("WSP-"):
             continue
         memberships = read_jsonl(home / "workspaces" / workspace_ref / "memberships" / "projects.jsonl")
-        if any(row.get("active") is True and row.get("project_ref") == project_ref for row in memberships):
-            matches.append(workspace_ref)
-    return matches[0] if len(matches) == 1 else None
+        rows = [row for row in memberships if row.get("active") is True and row.get("project_ref") == project_ref]
+        if rows:
+            latest_membership = max(str(row.get("added_at", "")) for row in rows)
+            membership_path = home / "workspaces" / workspace_ref / "memberships" / "projects.jsonl"
+            try:
+                mtime_ns = membership_path.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            matches.append((latest_membership, str(workspace.get("created_at", "")), mtime_ns, workspace_ref))
+    if not matches:
+        return None
+    matches.sort(reverse=True)
+    return matches[0][3]
 
 
 def resolve_workspace_ref(pointer: dict, cwd: str | None) -> str | None:
@@ -368,34 +378,34 @@ def bash_pressure(settings: dict[str, Any], classification: str, act_ref: str | 
     }
 
 
-def call_http(pointer: dict, name: str, arguments: dict) -> bool:
+def call_http(pointer: dict, name: str, arguments: dict) -> dict[str, Any] | None:
     server = str(pointer.get("mcp_server", ""))
     if not server.startswith(("http://", "https://")):
-        return False
+        return None
     body = json.dumps({"name": name, "arguments": arguments}).encode("utf-8")
     request = Request(server.rstrip("/") + "/call", data=body, headers={"content-type": "application/json"}, method="POST")
     try:
         with urlopen(request, timeout=1.5) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return bool(payload.get("ok"))
+        return payload if isinstance(payload, dict) else None
     except (OSError, URLError, json.JSONDecodeError):
-        return False
+        return None
 
 
-def call_local(pointer: dict, name: str, arguments: dict) -> bool:
+def call_local(pointer: dict, name: str, arguments: dict) -> dict[str, Any] | None:
     root = repo_root()
     if root is None:
-        return False
+        return None
     sys.path.insert(0, str(root / "src"))
     try:
         from tep import MCPAdapter, Runtime, TEPHome
     except ImportError:
         return call_local_subprocess(root, pointer, name, arguments)
     response = MCPAdapter(Runtime(TEPHome(str(tep_home(pointer))))).call_tool(name, arguments)
-    return bool(response.get("ok"))
+    return response
 
 
-def call_local_subprocess(root: Path, pointer: dict, name: str, arguments: dict) -> bool:
+def call_local_subprocess(root: Path, pointer: dict, name: str, arguments: dict) -> dict[str, Any] | None:
     candidates = [
         os.environ.get("TEP_PYTHON"),
         "/tmp/tep-core-venv/bin/python",
@@ -408,7 +418,7 @@ def call_local_subprocess(root: Path, pointer: dict, name: str, arguments: dict)
         "sys.path.insert(0, payload['repo_src']); "
         "from tep import MCPAdapter, Runtime, TEPHome; "
         "response=MCPAdapter(Runtime(TEPHome(payload['tep_home']))).call_tool(payload['name'], payload['arguments']); "
-        "print(json.dumps({'ok': bool(response.get('ok'))}))"
+        "print(json.dumps(response))"
     )
     payload = {
         "repo_src": str(root / "src"),
@@ -441,12 +451,12 @@ def call_local_subprocess(root: Path, pointer: dict, name: str, arguments: dict)
             result = json.loads(completed.stdout)
         except json.JSONDecodeError:
             continue
-        if result.get("ok") is True:
-            return True
-    return False
+        if isinstance(result, dict):
+            return result
+    return None
 
 
-def call_tep(pointer: dict, name: str, arguments: dict) -> bool:
+def call_tep(pointer: dict, name: str, arguments: dict) -> dict[str, Any] | None:
     return call_http(pointer, name, arguments) or call_local(pointer, name, arguments)
 
 
@@ -479,6 +489,33 @@ def exit_code(payload: dict) -> int | None:
         if isinstance(container, dict) and isinstance(container.get("exit_code"), int):
             return container["exit_code"]
     return payload.get("exit_code") if isinstance(payload.get("exit_code"), int) else None
+
+
+def response_text(payload: dict, stream: str) -> str:
+    keys = {
+        "stdout": ("stdout", "output"),
+        "stderr": ("stderr", "error_output"),
+    }[stream]
+    for container_name in ("tool_response", "result", "response"):
+        container = payload.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for key in keys:
+            value = container.get(key)
+            if isinstance(value, str):
+                return value
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def command_observation_statement(command: str, code: int) -> str:
+    compact = " ".join(command.split())
+    if len(compact) > 160:
+        compact = compact[:157] + "..."
+    return f"Command `{compact}` exited with code {code}."
 
 
 def workspace_ref() -> str | None:
@@ -553,7 +590,9 @@ def handle_post_bash(payload: dict) -> int:
     command = command_text(payload)
     code = exit_code(payload)
     if pointer and wsp and command and code is not None:
-        call_tep(
+        stdout = response_text(payload, "stdout")
+        stderr = response_text(payload, "stderr")
+        captured = call_tep(
             pointer,
             "capture_bash_command",
             {
@@ -561,8 +600,56 @@ def handle_post_bash(payload: dict) -> int:
                 "command": command,
                 "cwd": str(payload.get("cwd") or ""),
                 "exit_code": code,
+                "stdout": stdout,
+                "stderr": stderr,
             },
         )
+        run = captured.get("data", {}).get("run") if isinstance(captured, dict) and captured.get("ok") else None
+        if not isinstance(run, dict):
+            return 0
+        statement = command_observation_statement(command, code)
+        source_response = None
+        if stdout:
+            source_response = call_tep(pointer, "capture_run_output_source", {"workspace_ref": wsp, "run_ref": run["id"], "stream": "stdout"})
+        elif stderr:
+            source_response = call_tep(pointer, "capture_run_output_source", {"workspace_ref": wsp, "run_ref": run["id"], "stream": "stderr"})
+        else:
+            source_response = call_tep(
+                pointer,
+                "create_source",
+                {
+                    "workspace_ref": wsp,
+                    "source_kind": "command_summary",
+                    "quote": statement,
+                    "classification": {
+                        "input_class": "observation",
+                        "source_class": "runtime_observation",
+                        "document_kind": "command_summary",
+                        "evidence_role": "observation",
+                        "authority_scope": "local_runtime",
+                        "independence_key": f"run:{run['id']}",
+                    },
+                    "origin": {"kind": "command", "ref": run["id"]},
+                    "provenance": {
+                        "entity_ref": run["id"],
+                        "activity_ref": run["id"],
+                        "responsible_agent": run.get("agent_ref") or "runtime",
+                        "content_hash": run.get("content_hash"),
+                        "locator": f"{run['id']}:summary",
+                        "quote_span": None,
+                        "retrieved_at": None,
+                        "published_at": None,
+                    },
+                    "critique_status": "audited",
+                },
+            )
+        source = source_response.get("data", {}).get("source") if isinstance(source_response, dict) and source_response.get("ok") else None
+        if isinstance(source, dict):
+            project_ref = pointer.get("project_ref")
+            payload_args = {"workspace_ref": wsp, "statement": statement, "source_refs": [source["id"]]}
+            if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
+                payload_args["project_refs"] = [project_ref]
+            call_tep(pointer, "create_claim", payload_args)
     return 0
 
 
