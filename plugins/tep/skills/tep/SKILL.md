@@ -139,6 +139,11 @@ project-scoped packs with `project_ref`, or global workspace packs with neither.
 `task_briefing` must be task-scoped. Other required kinds may be satisfied by
 task, visible project, or global packs, so reusable guidelines/theory should be
 compiled once at project/global scope and only loaded by the agent when needed.
+When a new `CLM-*` or relation is created, overlapping active context packs are
+marked `stale`: task-scoped claims stale that task, project-scoped claims stale
+that project plus task packs for tasks in that project, and unscoped workspace
+claims stale global packs. Recompile stale CTX text from current facts before
+using it as task guidance.
 
 TEP writes metadata plus a `.md` file under the workspace artifacts directory
 and returns the file path in the briefing. Required context packs gate task

@@ -197,6 +197,46 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(brief.data["compiled_context"]["missing_required"], [])
             self.assertEqual(brief.data["compiled_context"]["requirements"]["coding_guidelines"], "on_demand")
 
+    def test_new_claim_invalidates_overlapping_context_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            project = runtime.register_project("primary").data["project"]
+            runtime.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="test")
+            task = runtime.create_task(workspace["id"], "Task with cached context", project_refs=[project["id"]]).data["task"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Context support.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            support = runtime.create_claim(workspace["id"], "Context support exists.", source_refs=[source["id"]], project_refs=[project["id"]]).data["claim"]
+            task_pack = runtime.compile_context_pack(workspace["id"], task_ref=task["id"], kind="task_briefing", text="# Task\nCached task view.\n", support_refs=[support["id"]]).data["context_pack"]
+            project_pack = runtime.compile_context_pack(workspace["id"], project_ref=project["id"], kind="coding_guidelines", text="# Coding\nCached project view.\n", support_refs=[support["id"]]).data["context_pack"]
+            global_pack = runtime.compile_context_pack(workspace["id"], kind="domain_theory", text="# Theory\nCached global view.\n", support_refs=[support["id"]]).data["context_pack"]
+
+            project_claim = runtime.create_claim(workspace["id"], "Project cache inputs changed.", source_refs=[source["id"]], project_refs=[project["id"]])
+
+            self.assertTrue(project_claim.ok, project_claim.error)
+            self.assertEqual(set(project_claim.data["invalidated_context_refs"]), {task_pack["id"], project_pack["id"]})
+            self.assertEqual(runtime.store.read_context_pack(workspace["id"], task_pack["id"])["status"], "stale")
+            self.assertEqual(runtime.store.read_context_pack(workspace["id"], project_pack["id"])["status"], "stale")
+            self.assertEqual(runtime.store.read_context_pack(workspace["id"], global_pack["id"])["status"], "active")
+            self.assertIn("compile_context_pack", {move["operation_kind"] for move in project_claim.valid_moves})
+
+            global_claim = runtime.create_claim(workspace["id"], "Workspace-wide cache inputs changed.", source_refs=[source["id"]])
+
+            self.assertTrue(global_claim.ok, global_claim.error)
+            self.assertEqual(global_claim.data["invalidated_context_refs"], [global_pack["id"]])
+            self.assertEqual(runtime.store.read_context_pack(workspace["id"], global_pack["id"])["status"], "stale")
+
     def test_append_and_validate_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2166,7 +2206,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.7")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.8")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}

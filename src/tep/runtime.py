@@ -480,6 +480,7 @@ class Runtime:
     def create_claim(self, workspace_ref: str, statement: str, **kwargs: Any) -> RuntimeResponse:
         def op() -> RuntimeResponse:
             claim = self.store.create_claim(workspace_ref, statement, **kwargs)
+            invalidated_context_refs = self._context_invalidated_by_claim(workspace_ref, claim["id"])
             source_pressure = []
             if not claim.get("source_refs"):
                 source_pressure.append(
@@ -493,13 +494,16 @@ class Runtime:
                         ],
                     }
                 )
+            valid_moves = [
+                move("append_ledger", "append_ledger", "Snapshot claim into current agent ledger.", writes=True),
+                move("lookup", "lookup_facts", "Look for duplicates, supports, or contradictions."),
+            ]
+            if invalidated_context_refs:
+                valid_moves.append(move("mutate_record", "compile_context_pack", "Recompile stale CTX-* context packs affected by this claim.", writes=True))
             return ok_response(
-                {"claim": claim},
+                {"claim": claim, "invalidated_context_refs": invalidated_context_refs},
                 source_pressure=source_pressure,
-                valid_moves=[
-                    move("append_ledger", "append_ledger", "Snapshot claim into current agent ledger.", writes=True),
-                    move("lookup", "lookup_facts", "Look for duplicates, supports, or contradictions."),
-                ],
+                valid_moves=valid_moves,
             )
 
         return self._guard(op)
@@ -540,11 +544,14 @@ class Runtime:
                 move("append_ledger", "append_ledger", "Snapshot relation claim into current ledger.", writes=True),
                 move("detail", "record_detail", "Inspect relation posture."),
             ]
+            invalidated_context_refs = self._context_invalidated_by_claim(workspace_ref, relation_claim["id"])
+            if invalidated_context_refs:
+                valid_moves.append(move("mutate_record", "compile_context_pack", "Recompile stale CTX-* context packs affected by this relation.", writes=True))
             if relation_type == "challenges_freshness":
                 valid_moves.append(move("probe_step", "open_probe", "Verify the freshness challenge before replacing trusted fact.", writes=True))
             else:
                 valid_moves.append(move("lookup", "lookup_facts", "Look for supporting or conflicting relation facts."))
-            return ok_response({"claim": relation_claim}, valid_moves=valid_moves)
+            return ok_response({"claim": relation_claim, "invalidated_context_refs": invalidated_context_refs}, valid_moves=valid_moves)
 
         return self._guard(op)
 
@@ -1272,6 +1279,13 @@ class Runtime:
         for project_ref in project_refs:
             packs.extend(self.store.context_packs(workspace_ref, project_ref=project_ref, status="active"))
         return self._dedupe_context_packs(packs)
+
+    def _context_invalidated_by_claim(self, workspace_ref: str, claim_ref: str) -> list[str]:
+        return [
+            pack["id"]
+            for pack in self.store.context_packs(workspace_ref, status="stale")
+            if pack.get("stale_trigger_ref") == claim_ref
+        ]
 
     @staticmethod
     def _context_kind_satisfied(kind: str, active_by_kind: dict[str, dict[str, Any]]) -> bool:

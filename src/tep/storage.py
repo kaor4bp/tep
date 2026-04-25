@@ -515,6 +515,38 @@ class TEPHome:
             return {"ref": ref, "hash": canonical_hash(source), "record_type": "source"}
         raise ValidationError(f"unsupported_context_support_ref:{ref}")
 
+    def _invalidate_context_packs_for_claim(self, workspace_ref: str, claim: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._invalidate_context_packs_for_claim_in_tx(workspace_ref, claim, tx=None)
+
+    def _invalidate_context_packs_for_claim_in_tx(self, workspace_ref: str, claim: dict[str, Any], *, tx: FileTransaction | None) -> list[dict[str, Any]]:
+        scope = claim.get("scope", {})
+        project_refs = set(scope.get("project_refs", []))
+        task_refs = set(scope.get("task_refs", []))
+        affected: list[dict[str, Any]] = []
+        for pack in self.context_packs(workspace_ref, status="active"):
+            scope_type = pack.get("scope_type")
+            should_stale = False
+            if scope_type == "task":
+                pack_task = pack.get("task_ref")
+                if pack_task in task_refs:
+                    should_stale = True
+                elif project_refs and pack_task:
+                    task = self.read_task(workspace_ref, pack_task)
+                    should_stale = bool(project_refs.intersection(task.get("project_refs", [])))
+            elif scope_type == "project":
+                should_stale = pack.get("project_ref") in project_refs
+            elif scope_type == "global":
+                should_stale = not project_refs and not task_refs
+            if not should_stale:
+                continue
+            pack["status"] = "stale"
+            pack["stale_reason"] = "new_claim_in_scope"
+            pack["stale_trigger_ref"] = claim["id"]
+            pack["updated_at"] = utc_now()
+            self._write_json(self.workspace_dir(workspace_ref) / pack["metadata_path"], pack, tx=tx)
+            affected.append(pack)
+        return affected
+
     def attach_agent_to_task(self, workspace_ref: str, agent_ref: str, task_ref: str) -> dict[str, Any]:
         agent = self.read_agent(workspace_ref, agent_ref)
         task = self.read_task(workspace_ref, task_ref)
@@ -744,6 +776,7 @@ class TEPHome:
         support_refs: list[str] | None = None,
         contradiction_refs: list[str] | None = None,
         relation: dict[str, Any] | None = None,
+        tx: FileTransaction | None = None,
     ) -> dict[str, Any]:
         self.ensure_workspace(workspace_ref)
         claim_ref = new_id("CLM")
@@ -785,7 +818,16 @@ class TEPHome:
             "updated_at": utc_now(),
         }
         record["semantic_hash"] = canonical_hash(self._claim_semantic_payload(record))
-        self._write_json(self.claim_path(workspace_ref, claim_ref), record)
+        owns_tx = tx is None
+        tx = tx or self.begin_transaction("create_claim")
+        self._write_json(self.claim_path(workspace_ref, claim_ref), record, tx=tx)
+        affected = self._invalidate_context_packs_for_claim_in_tx(workspace_ref, record, tx=tx)
+        if owns_tx:
+            self._commit_transaction(
+                tx,
+                "create_claim",
+                refs={"workspace_ref": workspace_ref, "claim_ref": claim_ref, "invalidated_context_refs": [pack["id"] for pack in affected]},
+            )
         return record
 
     def create_relation_claim(
