@@ -115,7 +115,7 @@ only in the agent's memory.
 Strict mode requires all base task context kinds unless overridden in settings:
 `task_briefing`, `coding_guidelines`, `domain_theory`, and
 `project_conventions`. Balanced mode requires `task_briefing` and leaves the
-others on demand by default.
+others on demand by default. Advisory mode makes all context kinds on demand.
 
 ## Task Context Packs
 
@@ -134,12 +134,18 @@ Use typed tools:
 - `revoke_context_pack`
 
 `compile_context_pack` takes selected `CLM-*`/`SRC-*` support refs and the
-agent-written markdown text. TEP writes metadata plus a `.md` file under the
-workspace artifacts directory and returns the file path in the briefing.
-Required context packs gate task execution: ACT opening, protected preflight,
-task-bound Bash, task completion, and task final preflight are blocked until
-required active packs exist. Setup operations such as lookup, source capture,
-claim creation, and context compilation remain available.
+agent-written markdown text. It can compile task-scoped packs with `task_ref`,
+project-scoped packs with `project_ref`, or global workspace packs with neither.
+`task_briefing` must be task-scoped. Other required kinds may be satisfied by
+task, visible project, or global packs, so reusable guidelines/theory should be
+compiled once at project/global scope and only loaded by the agent when needed.
+
+TEP writes metadata plus a `.md` file under the workspace artifacts directory
+and returns the file path in the briefing. Required context packs gate task
+execution: ACT opening, protected preflight, task-bound Bash, task completion,
+and task final preflight are blocked until required active packs exist. Setup
+operations such as lookup, source capture, claim creation, and context
+compilation remain available.
 
 ## Source Capture
 

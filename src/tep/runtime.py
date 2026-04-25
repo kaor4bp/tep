@@ -205,7 +205,8 @@ class Runtime:
         self,
         workspace_ref: str,
         *,
-        task_ref: str,
+        task_ref: str | None = None,
+        project_ref: str | None = None,
         kind: str,
         text: str,
         support_refs: list[str],
@@ -215,13 +216,15 @@ class Runtime:
             pack = self.store.create_context_pack(
                 workspace_ref,
                 task_ref=task_ref,
+                project_ref=project_ref,
                 kind=kind,
                 text=text,
                 support_refs=support_refs,
                 agent_ref=agent_ref,
             )
+            task_context = self._task_context_state(workspace_ref, task_ref) if task_ref else None
             return ok_response(
-                {"context_pack": pack, "task_context": self._task_context_state(workspace_ref, task_ref)},
+                {"context_pack": pack, "task_context": task_context},
                 valid_moves=[
                     move("brief", "brief_current_context", "Refresh briefing with active context packs."),
                     move("detail", "record_detail", "Inspect compiled context pack."),
@@ -230,10 +233,10 @@ class Runtime:
 
         return self._guard(op)
 
-    def list_context_packs(self, workspace_ref: str, *, task_ref: str | None = None) -> RuntimeResponse:
+    def list_context_packs(self, workspace_ref: str, *, task_ref: str | None = None, project_ref: str | None = None, scope_type: str | None = None) -> RuntimeResponse:
         return self._guard(
             lambda: ok_response(
-                {"context_packs": self.store.context_packs(workspace_ref, task_ref=task_ref)},
+                {"context_packs": self.store.context_packs(workspace_ref, task_ref=task_ref, project_ref=project_ref, scope_type=scope_type)},
                 valid_moves=[move("brief", "brief_current_context", "Use active context packs for task guidance.")],
             )
         )
@@ -241,8 +244,9 @@ class Runtime:
     def revoke_context_pack(self, workspace_ref: str, context_ref: str, *, reason: str) -> RuntimeResponse:
         def op() -> RuntimeResponse:
             pack = self.store.revoke_context_pack(workspace_ref, context_ref, reason=reason)
+            task_context = self._task_context_state(workspace_ref, pack["task_ref"]) if pack.get("task_ref") else None
             return ok_response(
-                {"context_pack": pack, "task_context": self._task_context_state(workspace_ref, pack["task_ref"])},
+                {"context_pack": pack, "task_context": task_context},
                 valid_moves=[move("mutate_record", "compile_context_pack", "Compile replacement context if still required.", writes=True)],
             )
 
@@ -1229,17 +1233,22 @@ class Runtime:
         settings = self.store.read_settings(workspace_ref)
         requirements = context_requirements(settings)
         required = required_context_kinds(settings)
-        packs = self.store.context_packs(workspace_ref, task_ref=task_ref, status="active")
+        task = self.store.read_task(workspace_ref, task_ref)
+        task_project_refs = task.get("project_refs", [])
+        packs = self._context_packs_for_task(workspace_ref, task_ref, task_project_refs)
         active_by_kind = {pack["kind"]: pack for pack in packs}
-        missing = [kind for kind in required if kind not in active_by_kind]
+        missing = [kind for kind in required if not self._context_kind_satisfied(kind, active_by_kind)]
         return {
             "task_ref": task_ref,
+            "project_refs": task_project_refs,
             "requirements": requirements,
             "required_kinds": required,
             "active": [
                 {
                     "ref": pack["id"],
                     "kind": pack["kind"],
+                    "scope_type": pack.get("scope_type", "task"),
+                    "scope_ref": pack.get("scope_ref"),
                     "status": pack["status"],
                     "path": str(self.store.workspace_dir(workspace_ref) / pack["artifact_path"]),
                     "support_refs": pack.get("support_refs", []),
@@ -1256,6 +1265,31 @@ class Runtime:
             if missing
             else [move("brief", "brief_current_context", "Use active task context.")],
         }
+
+    def _context_packs_for_task(self, workspace_ref: str, task_ref: str, project_refs: list[str]) -> list[dict[str, Any]]:
+        packs = self.store.context_packs(workspace_ref, task_ref=task_ref, status="active")
+        packs.extend(self.store.context_packs(workspace_ref, scope_type="global", status="active"))
+        for project_ref in project_refs:
+            packs.extend(self.store.context_packs(workspace_ref, project_ref=project_ref, status="active"))
+        return self._dedupe_context_packs(packs)
+
+    @staticmethod
+    def _context_kind_satisfied(kind: str, active_by_kind: dict[str, dict[str, Any]]) -> bool:
+        pack = active_by_kind.get(kind)
+        if pack is None:
+            return False
+        return kind != "task_briefing" or pack.get("scope_type") == "task"
+
+    @staticmethod
+    def _dedupe_context_packs(packs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        result = []
+        for pack in packs:
+            pack_id = pack.get("id")
+            if isinstance(pack_id, str) and pack_id not in seen:
+                seen.add(pack_id)
+                result.append(pack)
+        return result
 
     def _require_task_context_ready(self, workspace_ref: str, agent_ref: str) -> None:
         agent = self.store.read_agent(workspace_ref, agent_ref)

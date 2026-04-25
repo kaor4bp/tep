@@ -397,24 +397,31 @@ class TEPHome:
         self,
         workspace_ref: str,
         *,
-        task_ref: str,
+        task_ref: str | None = None,
+        project_ref: str | None = None,
         kind: str,
         text: str,
         support_refs: list[str],
         agent_ref: str | None = None,
     ) -> dict[str, Any]:
         self.ensure_workspace(workspace_ref)
-        self.read_task(workspace_ref, task_ref)
         if kind not in CONTEXT_KINDS:
             raise ValidationError(f"unsupported_context_kind:{kind}")
+        if task_ref is not None:
+            self.read_task(workspace_ref, task_ref)
+        if project_ref is not None and project_ref not in self.visible_project_refs(workspace_ref):
+            raise ValidationError(f"context_project_not_visible:{project_ref}")
+        if kind == "task_briefing" and task_ref is None:
+            raise ValidationError("task_briefing_requires_task_ref")
         if not text.strip():
             raise ValidationError("context pack text must be non-empty")
         if not support_refs:
             raise ValidationError("context pack requires support_refs")
         support = [self._context_support_snapshot(workspace_ref, ref) for ref in support_refs]
         context_ref = new_id("CTX")
-        relative_md = f"artifacts/context_packs/{task_ref}/{context_ref}-{kind}.md"
-        relative_json = f"artifacts/context_packs/{task_ref}/{context_ref}.json"
+        scope_type, scope_ref, scope_dir = self._context_scope(task_ref=task_ref, project_ref=project_ref)
+        relative_md = f"artifacts/context_packs/{scope_dir}/{context_ref}-{kind}.md"
+        relative_json = f"artifacts/context_packs/{scope_dir}/{context_ref}.json"
         artifact_path = self.workspace_dir(workspace_ref) / relative_md
         metadata_path = self.workspace_dir(workspace_ref) / relative_json
         record = {
@@ -422,6 +429,9 @@ class TEPHome:
             "record_type": "context_pack",
             "workspace_ref": workspace_ref,
             "task_ref": task_ref,
+            "project_ref": project_ref,
+            "scope_type": scope_type,
+            "scope_ref": scope_ref,
             "kind": kind,
             "format": "markdown",
             "artifact_path": relative_md,
@@ -433,7 +443,7 @@ class TEPHome:
             "created_at": utc_now(),
             "updated_at": utc_now(),
         }
-        for existing in self.context_packs(workspace_ref, task_ref=task_ref, kind=kind, status="active"):
+        for existing in self.context_packs(workspace_ref, task_ref=task_ref, project_ref=project_ref, scope_type=scope_type, kind=kind, status="active"):
             existing["status"] = "stale"
             existing["stale_reason"] = "replaced_by_new_context_pack"
             existing["updated_at"] = utc_now()
@@ -444,7 +454,7 @@ class TEPHome:
         return record
 
     def read_context_pack(self, workspace_ref: str, context_ref: str) -> dict[str, Any]:
-        for path in sorted((self.workspace_dir(workspace_ref) / "artifacts" / "context_packs").glob(f"*/{context_ref}.json")):
+        for path in sorted((self.workspace_dir(workspace_ref) / "artifacts" / "context_packs").glob(f"**/{context_ref}.json")):
             return read_json(path)
         raise NotFoundError(f"context pack not found: {context_ref}")
 
@@ -453,12 +463,19 @@ class TEPHome:
         workspace_ref: str,
         *,
         task_ref: str | None = None,
+        project_ref: str | None = None,
+        scope_type: str | None = None,
         kind: str | None = None,
         status: str | None = None,
     ) -> list[dict[str, Any]]:
         base = self.workspace_dir(workspace_ref) / "artifacts" / "context_packs"
-        pattern = f"{task_ref}/CTX-*.json" if task_ref else "*/CTX-*.json"
-        records = [read_json(path) for path in sorted(base.glob(pattern))]
+        records = [read_json(path) for path in sorted(base.glob("**/CTX-*.json"))]
+        if task_ref is not None:
+            records = [record for record in records if record.get("task_ref") == task_ref]
+        if project_ref is not None:
+            records = [record for record in records if record.get("project_ref") == project_ref]
+        if scope_type is not None:
+            records = [record for record in records if record.get("scope_type") == scope_type]
         if kind is not None:
             records = [record for record in records if record.get("kind") == kind]
         if status is not None:
@@ -476,6 +493,14 @@ class TEPHome:
     def context_pack_text(self, workspace_ref: str, context_ref: str) -> str:
         record = self.read_context_pack(workspace_ref, context_ref)
         return (self.workspace_dir(workspace_ref) / record["artifact_path"]).read_text(encoding="utf-8")
+
+    @staticmethod
+    def _context_scope(*, task_ref: str | None, project_ref: str | None) -> tuple[str, str, str]:
+        if task_ref is not None:
+            return "task", task_ref, f"tasks/{task_ref}"
+        if project_ref is not None:
+            return "project", project_ref, f"projects/{project_ref}"
+        return "global", "global", "global"
 
     def _context_support_snapshot(self, workspace_ref: str, ref: str) -> dict[str, Any]:
         if ref.startswith("CLM-"):

@@ -96,13 +96,15 @@ def context_requirements(settings: dict[str, Any]) -> dict[str, str]:
         defaults = {kind: "required" for kind in CONTEXT_KINDS}
     elif mode == "off":
         defaults = {kind: "disabled" for kind in CONTEXT_KINDS}
-    else:
+    elif mode == "balanced":
         defaults = {
             "task_briefing": "required",
             "coding_guidelines": "on_demand",
             "domain_theory": "on_demand",
             "project_conventions": "on_demand",
         }
+    else:
+        defaults = {kind: "on_demand" for kind in CONTEXT_KINDS}
     defaults.update(enforcement.get("context_requirements", {}))
     return defaults
 

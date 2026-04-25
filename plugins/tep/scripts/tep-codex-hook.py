@@ -288,15 +288,52 @@ def required_context_kinds(settings: dict[str, Any]) -> list[str]:
         defaults = {kind: "required" for kind in CONTEXT_KINDS}
     elif mode == "off":
         defaults = {kind: "disabled" for kind in CONTEXT_KINDS}
-    else:
+    elif mode == "balanced":
         defaults = {
             "task_briefing": "required",
             "coding_guidelines": "on_demand",
             "domain_theory": "on_demand",
             "project_conventions": "on_demand",
         }
+    else:
+        defaults = {kind: "on_demand" for kind in CONTEXT_KINDS}
     defaults.update(enforcement.get("context_requirements", {}))
     return [kind for kind in CONTEXT_KINDS if defaults.get(kind) == "required"]
+
+
+def active_context_packs(pointer: dict, workspace: str, task_ref: str) -> list[dict[str, Any]]:
+    home = tep_home(pointer)
+    workspace_dir = home / "workspaces" / workspace
+    task = read_json(workspace_dir / "tasks" / f"{task_ref}.json")
+    project_refs = task.get("project_refs", [])
+    if not isinstance(project_refs, list):
+        project_refs = []
+    base = workspace_dir / "artifacts" / "context_packs"
+    paths = list((base / "tasks" / task_ref).glob("CTX-*.json"))
+    paths.extend((base / "global").glob("CTX-*.json"))
+    for project_ref in project_refs:
+        if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
+            paths.extend((base / "projects" / project_ref).glob("CTX-*.json"))
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in sorted(paths):
+        record = read_json(path)
+        record_id = record.get("id")
+        if record.get("status") != "active" or not isinstance(record_id, str) or record_id in seen:
+            continue
+        seen.add(record_id)
+        records.append(record)
+    return records
+
+
+def context_kind_satisfied(kind: str, records: list[dict[str, Any]]) -> bool:
+    for record in records:
+        if record.get("kind") != kind:
+            continue
+        if kind == "task_briefing" and record.get("scope_type") != "task":
+            continue
+        return True
+    return False
 
 
 def missing_task_context(pointer: dict, workspace: str | None, task_ref: str | None, settings: dict[str, Any]) -> list[str]:
@@ -305,13 +342,8 @@ def missing_task_context(pointer: dict, workspace: str | None, task_ref: str | N
     required = required_context_kinds(settings)
     if not required:
         return []
-    base = tep_home(pointer) / "workspaces" / workspace / "artifacts" / "context_packs" / task_ref
-    active = {
-        record.get("kind")
-        for path in sorted(base.glob("CTX-*.json"))
-        if (record := read_json(path)).get("status") == "active"
-    }
-    return [kind for kind in required if kind not in active]
+    active = active_context_packs(pointer, workspace, task_ref)
+    return [kind for kind in required if not context_kind_satisfied(kind, active)]
 
 
 def bash_pressure(settings: dict[str, Any], classification: str, act_ref: str | None) -> dict[str, Any]:

@@ -98,11 +98,11 @@ class MCPAdapter:
                 self._action_pressure,
             ),
             "compile_context_pack": (
-                MCPToolSpec("compile_context_pack", "context", True, "Compile task-scoped CTX-* text guidance.", ("workspace_ref", "task_ref", "kind", "text", "support_refs")),
+                MCPToolSpec("compile_context_pack", "context", True, "Compile scoped CTX-* text guidance.", ("workspace_ref", "kind", "text", "support_refs")),
                 self._compile_context_pack,
             ),
             "list_context_packs": (
-                MCPToolSpec("list_context_packs", "context", False, "List task-scoped CTX-* guidance packs.", ("workspace_ref",)),
+                MCPToolSpec("list_context_packs", "context", False, "List scoped CTX-* guidance packs.", ("workspace_ref",)),
                 self._list_context_packs,
             ),
             "revoke_context_pack": (
@@ -317,7 +317,8 @@ class MCPAdapter:
     def _compile_context_pack(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.compile_context_pack(
             args["workspace_ref"],
-            task_ref=args["task_ref"],
+            task_ref=args.get("task_ref"),
+            project_ref=args.get("project_ref"),
             kind=args["kind"],
             text=args["text"],
             support_refs=args["support_refs"],
@@ -325,7 +326,12 @@ class MCPAdapter:
         )
 
     def _list_context_packs(self, args: dict[str, Any]) -> RuntimeResponse:
-        return self.runtime.list_context_packs(args["workspace_ref"], task_ref=args.get("task_ref"))
+        return self.runtime.list_context_packs(
+            args["workspace_ref"],
+            task_ref=args.get("task_ref"),
+            project_ref=args.get("project_ref"),
+            scope_type=args.get("scope_type"),
+        )
 
     def _revoke_context_pack(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.revoke_context_pack(args["workspace_ref"], args["context_ref"], reason=args["reason"])

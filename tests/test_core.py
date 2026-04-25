@@ -127,6 +127,76 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(revoked.ok, revoked.error)
             self.assertEqual(revoked.data["context_pack"]["status"], "revoked")
 
+    def test_project_and_global_context_packs_satisfy_non_task_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            project = runtime.register_project("primary").data["project"]
+            runtime.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="test")
+            runtime.update_settings({"enforcement": {"mode": "strict"}}, workspace_ref=workspace["id"])
+            task = runtime.create_task(workspace["id"], "Implement with cached context", project_refs=[project["id"]]).data["task"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Use shared guidelines.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            claim = runtime.create_claim(workspace["id"], "Use shared guidelines.", source_refs=[source["id"]], project_refs=[project["id"]]).data["claim"]
+
+            runtime.compile_context_pack(workspace["id"], task_ref=task["id"], kind="task_briefing", text="# Task\nDo the task.\n", support_refs=[claim["id"]])
+            runtime.compile_context_pack(workspace["id"], project_ref=project["id"], kind="coding_guidelines", text="# Coding\nUse project style.\n", support_refs=[claim["id"]])
+            runtime.compile_context_pack(workspace["id"], project_ref=project["id"], kind="project_conventions", text="# Conventions\nUse project conventions.\n", support_refs=[claim["id"]])
+            runtime.compile_context_pack(workspace["id"], kind="domain_theory", text="# Theory\nUse global theory.\n", support_refs=[claim["id"]])
+
+            identity = generate_agent_identity("context-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            runtime.attach_agent_to_task(workspace["id"], agent["id"], task["id"])
+            brief = runtime.brief_current_context(workspace["id"], agent["id"])
+
+            self.assertTrue(brief.ok, brief.error)
+            self.assertEqual(brief.data["compiled_context"]["execution_state"], "ready")
+            self.assertEqual(
+                {pack["scope_type"] for pack in brief.data["compiled_context"]["active"]},
+                {"task", "project", "global"},
+            )
+
+    def test_on_demand_guidelines_do_not_block_missing_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            task = runtime.create_task(workspace["id"], "Task with default balanced context").data["task"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Task briefing only.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            claim = runtime.create_claim(workspace["id"], "Task briefing exists.", source_refs=[source["id"]]).data["claim"]
+            runtime.compile_context_pack(workspace["id"], task_ref=task["id"], kind="task_briefing", text="# Task\nBrief.\n", support_refs=[claim["id"]])
+            identity = generate_agent_identity("balanced-context-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            runtime.attach_agent_to_task(workspace["id"], agent["id"], task["id"])
+
+            brief = runtime.brief_current_context(workspace["id"], agent["id"])
+
+            self.assertEqual(brief.data["compiled_context"]["missing_required"], [])
+            self.assertEqual(brief.data["compiled_context"]["requirements"]["coding_guidelines"], "on_demand")
+
     def test_append_and_validate_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -1594,6 +1664,56 @@ class CoreTests(unittest.TestCase):
             output = json.loads(completed.stdout)
             self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertIn("missing_context", output["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_codex_hook_accepts_project_and_global_context_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            runtime = Runtime(store)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            store.update_settings({"enforcement": {"mode": "strict", "bash_policy": "classify"}}, workspace_ref=workspace["id"])
+            task = runtime.create_task(workspace["id"], "Do task-bound work", project_refs=[project["id"]]).data["task"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Use shared context.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            claim = runtime.create_claim(workspace["id"], "Shared context exists.", source_refs=[source["id"]], project_refs=[project["id"]]).data["claim"]
+            runtime.compile_context_pack(workspace["id"], task_ref=task["id"], kind="task_briefing", text="# Task\nBrief.\n", support_refs=[claim["id"]])
+            runtime.compile_context_pack(workspace["id"], project_ref=project["id"], kind="coding_guidelines", text="# Coding\nGuidelines.\n", support_refs=[claim["id"]])
+            runtime.compile_context_pack(workspace["id"], project_ref=project["id"], kind="project_conventions", text="# Conventions\nProject conventions.\n", support_refs=[claim["id"]])
+            runtime.compile_context_pack(workspace["id"], kind="domain_theory", text="# Theory\nGlobal theory.\n", support_refs=[claim["id"]])
+            identity = generate_agent_identity("hook-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            runtime.attach_agent_to_task(workspace["id"], agent["id"], task["id"])
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env["TEP_AGENT_REF"] = agent["id"]
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "rg -n settings src"}}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "")
 
     def test_codex_hook_allows_strict_bash_when_single_open_act_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
