@@ -52,8 +52,8 @@ At the beginning of a TEP-backed task:
    Treat failures as setup blockers for automatic capture, not as permission to
    bypass typed TEP tools. Report the smallest repair step.
 2. Read the local `.tep` pointer if present.
-3. Confirm whether `mcp_server` is HTTP or stdio. Prefer HTTP for standalone
-   hook capture; stdio is still valid for explicit local tool calls.
+3. Confirm whether `mcp_server` is HTTP or stdio. HTTP is useful for standalone
+   servers; stdio is valid for Codex MCP and hook fallback.
 4. Call `generate_agent_identity` if this thread does not already hold an
    in-memory identity.
 5. Keep `agent_private_key` only in memory for the current agent session.
@@ -61,6 +61,8 @@ At the beginning of a TEP-backed task:
 7. Call `brief_current_context`.
 8. If the current user message contains task facts or instructions that should
    survive the chat, call `capture_input`.
+9. Read the `settings.enforcement` block in the briefing. It controls whether
+   Bash/edit actions are advisory, classified, or ACT-gated.
 
 `AGENT-*` is a live thread/session, not a reusable personality. Do not continue
 another agent's ledger with this thread's key. Foreign ledgers are readable for
@@ -68,9 +70,39 @@ coordination but appendable only by their owner identity.
 
 The plugin ships Codex hook adapters for `SessionStart`, `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse`, and `Stop`. Hooks are conservative: they check
-visibility, block direct `.tep` writes, and best-effort capture prompts and Bash
-runs only when a local `.tep` pointer, HTTP transport, and `TEP_WORKSPACE_REF`
-are available. Explicit MCP/tool calls remain the reliable path.
+visibility, block direct `.tep` writes, best-effort capture prompts and Bash
+runs through HTTP or local stdio fallback, and apply enforcement settings before
+Bash execution. Explicit MCP/tool calls remain the reliable path.
+
+## Enforcement Settings
+
+TEP settings live under `~/.tep/settings.json` with optional workspace override
+at `~/.tep/workspaces/WSP-*/settings.json`. Use typed tools only:
+
+- `read_settings`
+- `update_settings`
+- `action_pressure`
+
+Default enforcement is `balanced`:
+
+```json
+{
+  "enforcement": {
+    "mode": "off|advisory|balanced|strict",
+    "session_start_requires_frame": false,
+    "bash_policy": "capture_only|classify|act_for_evidence|act_for_all",
+    "edit_policy": "advisory|act_required",
+    "final_policy": "advisory|preflight_required",
+    "unknown_action_policy": "allow_with_pressure|block_until_act"
+  }
+}
+```
+
+Before Bash or file edits, check the current briefing or call
+`action_pressure`. If the action is blocked or ACT-required, use
+`open_probe -> protected_action_preflight -> execute -> capture_probe_result ->
+close_probe`. Hooks cannot open ACT for you because `agent_private_key` exists
+only in the agent's memory.
 
 ## Source Capture
 

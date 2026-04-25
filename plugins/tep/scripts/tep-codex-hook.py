@@ -16,6 +16,29 @@ from urllib.request import Request, urlopen
 
 TEP_MARKER = "TEP"
 DIRECT_TEP_WRITE = re.compile(r"(^|[\s;&|])(?:cat|tee|python3?|node|perl|ruby|sed|cp|mv|rm|touch|mkdir)\b.*(?:~?/\.tep|/\.tep)(?:/|\s|$)")
+DEFAULT_SETTINGS = {
+    "version": 1,
+    "enforcement": {
+        "mode": "balanced",
+        "session_start_requires_frame": False,
+        "bash_policy": "act_for_evidence",
+        "edit_policy": "act_required",
+        "final_policy": "preflight_required",
+        "unknown_action_policy": "block_until_act",
+    },
+}
+READ_ONLY_BASH = re.compile(
+    r"^\s*(?:pwd|ls(?:\s|$)|find(?:\s|$)|rg(?:\s|$)|grep(?:\s|$)|sed\s+-n(?:\s|$)|cat(?:\s|$)|"
+    r"head(?:\s|$)|tail(?:\s|$)|wc(?:\s|$)|nl(?:\s|$)|git\s+(?:status|diff|log|show|branch)(?:\s|$)|test\s+[-a-zA-Z](?:\s|$))"
+)
+EVIDENCE_BASH = re.compile(
+    r"(^|[\s;&|])(?:pytest|tox|coverage|npm\s+test|pnpm\s+test|yarn\s+test|make\s+test|"
+    r"python3?\s+-m\s+(?:pytest|unittest)|uv\s+run\s+pytest|cargo\s+test|go\s+test)(?:\s|$)"
+)
+MUTATION_BASH = re.compile(
+    r"(^|[\s;&|])(?:rm|mv|cp|mkdir|touch|chmod|chown|git\s+(?:add|commit|push|reset|checkout|merge|rebase)|"
+    r"pip\s+install|python3?\s+-m\s+pip\s+install|npm\s+install|pnpm\s+install|yarn\s+add)(?:\s|$)|(?:>|>>)"
+)
 
 
 def load_payload() -> dict:
@@ -56,6 +79,21 @@ def emit_deny(message: str) -> None:
             }
         )
     )
+
+
+def merge_settings(*records: dict[str, Any]) -> dict[str, Any]:
+    result = json.loads(json.dumps(DEFAULT_SETTINGS))
+    for record in records:
+        deep_update(result, record)
+    return result
+
+
+def deep_update(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key, value in source.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            deep_update(target[key], value)
+        else:
+            target[key] = value
 
 
 def find_pointer(cwd: str | None) -> tuple[Path | None, dict]:
@@ -169,6 +207,76 @@ def resolve_workspace_ref(pointer: dict, cwd: str | None) -> str | None:
     if not isinstance(project_ref, str) or not (home / "registry" / "projects" / f"{project_ref}.json").exists():
         project_ref = project_ref_from_root(home, cwd)
     return workspace_for_project(home, project_ref)
+
+
+def read_settings_for(pointer: dict, workspace: str | None) -> dict[str, Any]:
+    home = tep_home(pointer)
+    global_settings = read_json(home / "settings.json")
+    workspace_settings = read_json(home / "workspaces" / workspace / "settings.json") if workspace else {}
+    return merge_settings(global_settings, workspace_settings)
+
+
+def classify_bash(command: str) -> str:
+    if not command:
+        return "unknown"
+    if MUTATION_BASH.search(command):
+        return "mutation"
+    if EVIDENCE_BASH.search(command):
+        return "evidence_producing"
+    if READ_ONLY_BASH.search(command):
+        return "read_only_context"
+    return "unknown"
+
+
+def open_act_ref(pointer: dict, workspace: str | None) -> str | None:
+    explicit = os.environ.get("TEP_OPEN_ACT_REF")
+    if explicit and explicit.startswith("L-"):
+        return explicit
+    agent_ref = os.environ.get("TEP_AGENT_REF")
+    if not workspace:
+        return None
+    home = tep_home(pointer)
+    if agent_ref:
+        return open_act_in_ledger(home / "workspaces" / workspace / "agents" / agent_ref / "ledger.jsonl")
+    open_refs = [
+        ref
+        for ledger_path in sorted((home / "workspaces" / workspace / "agents").glob("AGENT-*/ledger.jsonl"))
+        if (ref := open_act_in_ledger(ledger_path)) is not None
+    ]
+    return open_refs[0] if len(open_refs) == 1 else None
+
+
+def open_act_in_ledger(ledger_path: Path) -> str | None:
+    rows = read_jsonl(ledger_path)
+    open_ref = None
+    for row in rows:
+        if row.get("kind") == "act":
+            open_ref = row.get("id")
+        elif row.get("kind") == "close_act":
+            open_ref = None
+    return open_ref if isinstance(open_ref, str) else None
+
+
+def bash_pressure(settings: dict[str, Any], classification: str, act_ref: str | None) -> dict[str, Any]:
+    enforcement = settings.get("enforcement", {})
+    mode = enforcement.get("mode", "balanced")
+    policy = enforcement.get("bash_policy", "act_for_evidence")
+    unknown_policy = enforcement.get("unknown_action_policy", "block_until_act")
+    required = False
+    if mode != "off":
+        if policy == "act_for_all":
+            required = True
+        elif policy == "act_for_evidence":
+            required = classification in {"evidence_producing", "mutation"} or (classification == "unknown" and unknown_policy == "block_until_act")
+    blocked = required and act_ref is None and mode in {"balanced", "strict"}
+    return {
+        "mode": mode,
+        "bash_policy": policy,
+        "classification": classification,
+        "act_required": required,
+        "blocked": blocked,
+        "open_act": act_ref,
+    }
 
 
 def call_http(pointer: dict, name: str, arguments: dict) -> bool:
@@ -295,8 +403,13 @@ def handle_session_start(payload: dict) -> int:
         emit_context("No local .tep pointer found. Run tep-init before relying on TEP hooks.", event="SessionStart")
         return 0
     message = "TEP hooks visible. Start by generating/continuing in-memory agent identity, then call brief_current_context."
-    if resolve_workspace_ref(pointer, payload.get("cwd")) is None:
+    wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
+    if wsp is None:
         message += " No unique WSP-* resolved from .tep project membership; run tep-init or attach the project to one workspace."
+    else:
+        settings = read_settings_for(pointer, wsp)
+        enforcement = settings.get("enforcement", {})
+        message += f" Enforcement mode={enforcement.get('mode')} bash_policy={enforcement.get('bash_policy')}."
     emit_context(message, event="SessionStart")
     return 0
 
@@ -314,6 +427,26 @@ def handle_pre_bash(payload: dict) -> int:
     command = command_text(payload)
     if command and DIRECT_TEP_WRITE.search(command):
         emit_deny("Direct writes to .tep storage are blocked; use typed TEP tools.")
+        return 0
+    pointer_path, pointer = find_pointer(payload.get("cwd"))
+    if pointer_path is None or not command:
+        return 0
+    wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
+    settings = read_settings_for(pointer, wsp)
+    pressure = bash_pressure(settings, classify_bash(command), open_act_ref(pointer, wsp))
+    if pressure["blocked"]:
+        emit_deny(
+            "Bash action is blocked by TEP enforcement settings. "
+            f"classification={pressure['classification']} policy={pressure['bash_policy']}. "
+            "Open an ACT with open_probe, then call protected_action_preflight before running this command."
+        )
+    elif pressure["act_required"]:
+        prefix = "Bash action is ACT-bound before execution." if pressure["open_act"] else "Bash action should be bound to an open ACT before execution."
+        emit_context(
+            f"{prefix} "
+            f"classification={pressure['classification']} policy={pressure['bash_policy']}.",
+            event="PreToolUse",
+        )
     return 0
 
 

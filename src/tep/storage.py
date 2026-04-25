@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .crypto import AgentIdentity
+from .enforcement import DEFAULT_SETTINGS, merged_settings
 from .errors import NotFoundError, ValidationError
 from .ids import new_id
 from .jsoncanon import bytes_hash, canonical_dumps, canonical_hash, loads_no_duplicates, read_json
@@ -56,6 +57,8 @@ class TEPHome:
         ]:
             path.mkdir(parents=True, exist_ok=True)
         (self.root / "records" / "sources" / "source_events.jsonl").touch(exist_ok=True)
+        if not self.settings_path().exists():
+            self._write_json(self.settings_path(), DEFAULT_SETTINGS)
 
     def begin_transaction(self, operation: str) -> FileTransaction:
         self.ensure()
@@ -80,6 +83,26 @@ class TEPHome:
 
     def records_dir(self) -> Path:
         return self.root / "records"
+
+    def settings_path(self, workspace_ref: str | None = None) -> Path:
+        if workspace_ref is None:
+            return self.root / "settings.json"
+        return self.workspace_dir(workspace_ref) / "settings.json"
+
+    def read_settings(self, workspace_ref: str | None = None) -> dict[str, Any]:
+        self.ensure()
+        global_settings = read_json(self.settings_path()) if self.settings_path().exists() else {}
+        workspace_settings = {}
+        if workspace_ref is not None and self.settings_path(workspace_ref).exists():
+            workspace_settings = read_json(self.settings_path(workspace_ref))
+        return merged_settings(global_settings, workspace_settings)
+
+    def update_settings(self, settings: dict[str, Any], *, workspace_ref: str | None = None) -> dict[str, Any]:
+        self.ensure_workspace(workspace_ref) if workspace_ref is not None else self.ensure()
+        current = self.read_settings(workspace_ref)
+        merged = merged_settings(current, settings)
+        self._write_json(self.settings_path(workspace_ref), merged)
+        return merged
 
     def _record_path(self, directory: str, record_ref: str) -> Path:
         parts = record_ref.split("-")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .crypto import AgentIdentity, assert_private_key_matches, generate_agent_identity
+from .enforcement import action_pressure as compute_action_pressure
 from .errors import OwnershipError, TEPError, ValidationError
 from .indexes import IndexService
 from .ingest import ingest_file_payload, ingest_text_payload
@@ -61,6 +62,36 @@ class Runtime:
                 raise ValidationError("agent_not_found")
             agent = self.store.create_agent(workspace_ref, identity, thread_ref=thread_ref)
             return ok_response({"agent": agent}, valid_moves=[move("brief", "brief_current_context", "Load initial task and ledger posture.")])
+
+        return self._guard(op)
+
+    def read_settings(self, workspace_ref: str | None = None) -> RuntimeResponse:
+        return self._guard(lambda: ok_response({"settings": self.store.read_settings(workspace_ref)}))
+
+    def update_settings(self, settings: dict[str, Any], *, workspace_ref: str | None = None) -> RuntimeResponse:
+        return self._guard(
+            lambda: ok_response(
+                {"settings": self.store.update_settings(settings, workspace_ref=workspace_ref)},
+                valid_moves=[move("brief", "brief_current_context", "Refresh briefing with updated enforcement settings.")],
+            )
+        )
+
+    def action_pressure(
+        self,
+        workspace_ref: str,
+        *,
+        action_kind: str,
+        action: dict[str, Any],
+        agent_ref: str | None = None,
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            pressure = compute_action_pressure(
+                self.store.read_settings(workspace_ref),
+                action_kind,
+                action,
+                open_act=self._ledger_pressure(workspace_ref, agent_ref)["open_act"] if agent_ref else None,
+            )
+            return ok_response({"action_pressure": pressure}, valid_moves=pressure["valid_moves"])
 
         return self._guard(op)
 
@@ -878,6 +909,7 @@ class Runtime:
             return ok_response(
                 {
                     "workspace": {"ref": workspace_ref, "name": workspace.get("name")},
+                    "settings": self.store.read_settings(workspace_ref),
                     "projects": memberships,
                     "task": {
                         "active_task_path": task_path,

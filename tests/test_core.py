@@ -43,6 +43,37 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn(identity.private_key, raw)
             self.assertEqual(agent["public_key"], public_key_from_private(identity.private_key))
 
+    def test_settings_merge_and_action_pressure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+
+            defaults = runtime.read_settings(workspace["id"])
+            self.assertTrue(defaults.ok, defaults.error)
+            self.assertEqual(defaults.data["settings"]["enforcement"]["mode"], "balanced")
+
+            updated = runtime.update_settings(
+                {"enforcement": {"mode": "strict", "bash_policy": "act_for_all"}},
+                workspace_ref=workspace["id"],
+            )
+            self.assertTrue(updated.ok, updated.error)
+            self.assertEqual(updated.data["settings"]["enforcement"]["mode"], "strict")
+            self.assertEqual(updated.data["settings"]["enforcement"]["bash_policy"], "act_for_all")
+
+            pressure = runtime.action_pressure(
+                workspace["id"],
+                action_kind="bash",
+                action={"command": "rg -n settings src"},
+            )
+            self.assertTrue(pressure.ok, pressure.error)
+            self.assertTrue(pressure.data["action_pressure"]["blocked"])
+            self.assertEqual(pressure.data["action_pressure"]["classification"], "read_only_context")
+
+            bad = runtime.update_settings({"enforcement": {"mode": "chaos"}}, workspace_ref=workspace["id"])
+            self.assertFalse(bad.ok)
+            self.assertIn("unsupported_enforcement_mode", bad.error["message"])
+
     def test_append_and_validate_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -1369,6 +1400,86 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(run["command"], "echo ok")
             self.assertEqual(run["exit_code"], 0)
 
+    def test_codex_hook_blocks_bash_when_strict_settings_require_act(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            store.update_settings({"enforcement": {"mode": "strict", "bash_policy": "act_for_all"}}, workspace_ref=workspace["id"])
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            payload = {"cwd": str(project_root), "tool_input": {"command": "rg -n settings src"}}
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertIn("Open an ACT", output["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_codex_hook_allows_strict_bash_when_single_open_act_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            runtime = Runtime(store)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            store.update_settings({"enforcement": {"mode": "strict", "bash_policy": "act_for_all"}}, workspace_ref=workspace["id"])
+            identity = generate_agent_identity("hook-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            claim = runtime.create_claim(workspace["id"], "Strict Bash needs an ACT.").data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot before strict hook probe.",
+                difficulty_bits=8,
+            )
+            runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Allow strict Bash hook smoke.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "rg -n settings src"}}),
+                text=True,
+                capture_output=True,
+                env=dict(os.environ),
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
+            self.assertIn("ACT-bound", output["hookSpecificOutput"]["additionalContext"])
+
     def test_secret_input_is_encrypted_not_redacted_or_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -1521,6 +1632,9 @@ class CoreTests(unittest.TestCase):
             self.assertIn("capture_bash_command", tool_names)
             self.assertIn("capture_run_output_source", tool_names)
             self.assertIn("decrypt_sensitive_field", tool_names)
+            self.assertIn("read_settings", tool_names)
+            self.assertIn("update_settings", tool_names)
+            self.assertIn("action_pressure", tool_names)
 
             missing = adapter.call_tool("create_workspace", {})
             self.assertFalse(missing["ok"])
@@ -1537,6 +1651,24 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(identity["ok"], identity.get("error"))
             workspace = adapter.call_tool("create_workspace", {"name": "workspace"})
             self.assertTrue(workspace["ok"], workspace.get("error"))
+            settings = adapter.call_tool(
+                "update_settings",
+                {
+                    "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "settings": {"enforcement": {"mode": "advisory", "bash_policy": "classify"}},
+                },
+            )
+            self.assertTrue(settings["ok"], settings.get("error"))
+            pressure = adapter.call_tool(
+                "action_pressure",
+                {
+                    "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "action_kind": "bash",
+                    "action": {"command": "pytest -q"},
+                },
+            )
+            self.assertTrue(pressure["ok"], pressure.get("error"))
+            self.assertEqual(pressure["data"]["action_pressure"]["level"], "medium")
             agent = adapter.call_tool(
                 "start_agent_thread",
                 {
@@ -1736,7 +1868,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.5")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.6")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}

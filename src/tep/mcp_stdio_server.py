@@ -18,7 +18,7 @@ from .runtime import Runtime
 from .storage import TEPHome
 
 
-SERVER_VERSION = "0.6.5"
+SERVER_VERSION = "0.6.6"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 
@@ -30,7 +30,7 @@ def _property_schema(name: str) -> JsonObject:
         return {"type": "integer"}
     if name in {"goals", "support_refs", "project_refs", "roots", "aliases", "done_criteria"}:
         return {"type": "array", "items": {"type": "string"}}
-    if name == "identity":
+    if name in {"identity", "settings", "action", "scope", "synced_object", "bridge_limits"}:
         return {"type": "object", "additionalProperties": True}
     if name == "allow_create":
         return {"type": "boolean"}

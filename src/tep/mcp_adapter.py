@@ -85,6 +85,18 @@ class MCPAdapter:
                 MCPToolSpec("brief_current_context", "brief", False, "Return current workspace/task/agent briefing.", ("workspace_ref",)),
                 self._brief_current_context,
             ),
+            "read_settings": (
+                MCPToolSpec("read_settings", "settings", False, "Read merged TEP enforcement settings.", ()),
+                self._read_settings,
+            ),
+            "update_settings": (
+                MCPToolSpec("update_settings", "settings", True, "Update TEP enforcement settings.", ("settings",)),
+                self._update_settings,
+            ),
+            "action_pressure": (
+                MCPToolSpec("action_pressure", "settings", False, "Classify an action against enforcement settings.", ("workspace_ref", "action_kind", "action")),
+                self._action_pressure,
+            ),
             "create_source": (
                 MCPToolSpec("create_source", "source", True, "Capture SRC-* through typed source API.", ("workspace_ref", "source_kind", "quote")),
                 self._create_source,
@@ -275,6 +287,20 @@ class MCPAdapter:
 
     def _brief_current_context(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.brief_current_context(args["workspace_ref"], args.get("agent_ref"))
+
+    def _read_settings(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.read_settings(args.get("workspace_ref"))
+
+    def _update_settings(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.update_settings(args["settings"], workspace_ref=args.get("workspace_ref"))
+
+    def _action_pressure(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.action_pressure(
+            args["workspace_ref"],
+            action_kind=args["action_kind"],
+            action=args["action"],
+            agent_ref=args.get("agent_ref"),
+        )
 
     def _create_source(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)
