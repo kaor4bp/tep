@@ -97,6 +97,18 @@ class MCPAdapter:
                 MCPToolSpec("action_pressure", "settings", False, "Classify an action against enforcement settings.", ("workspace_ref", "action_kind", "action")),
                 self._action_pressure,
             ),
+            "compile_context_pack": (
+                MCPToolSpec("compile_context_pack", "context", True, "Compile task-scoped CTX-* text guidance.", ("workspace_ref", "task_ref", "kind", "text", "support_refs")),
+                self._compile_context_pack,
+            ),
+            "list_context_packs": (
+                MCPToolSpec("list_context_packs", "context", False, "List task-scoped CTX-* guidance packs.", ("workspace_ref",)),
+                self._list_context_packs,
+            ),
+            "revoke_context_pack": (
+                MCPToolSpec("revoke_context_pack", "context", True, "Revoke a CTX-* guidance pack.", ("workspace_ref", "context_ref", "reason")),
+                self._revoke_context_pack,
+            ),
             "create_source": (
                 MCPToolSpec("create_source", "source", True, "Capture SRC-* through typed source API.", ("workspace_ref", "source_kind", "quote")),
                 self._create_source,
@@ -301,6 +313,22 @@ class MCPAdapter:
             action=args["action"],
             agent_ref=args.get("agent_ref"),
         )
+
+    def _compile_context_pack(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.compile_context_pack(
+            args["workspace_ref"],
+            task_ref=args["task_ref"],
+            kind=args["kind"],
+            text=args["text"],
+            support_refs=args["support_refs"],
+            agent_ref=args.get("agent_ref"),
+        )
+
+    def _list_context_packs(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.list_context_packs(args["workspace_ref"], task_ref=args.get("task_ref"))
+
+    def _revoke_context_pack(self, args: dict[str, Any]) -> RuntimeResponse:
+        return self.runtime.revoke_context_pack(args["workspace_ref"], args["context_ref"], reason=args["reason"])
 
     def _create_source(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)

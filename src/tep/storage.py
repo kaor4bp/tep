@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .crypto import AgentIdentity
-from .enforcement import DEFAULT_SETTINGS, merged_settings
+from .enforcement import CONTEXT_KINDS, DEFAULT_SETTINGS, merged_settings
 from .errors import NotFoundError, ValidationError
 from .ids import new_id
 from .jsoncanon import bytes_hash, canonical_dumps, canonical_hash, loads_no_duplicates, read_json
@@ -73,7 +73,7 @@ class TEPHome:
             workspace / "records" / "run",
             workspace / "tasks",
             workspace / "agents",
-            workspace / "artifacts",
+            workspace / "artifacts" / "context_packs",
         ]:
             path.mkdir(parents=True, exist_ok=True)
         return workspace
@@ -392,6 +392,103 @@ class TEPHome:
 
     def input_path(self, workspace_ref: str, input_ref: str) -> Path:
         return self.workspace_dir(workspace_ref) / "records" / "inp" / f"{input_ref}.json"
+
+    def create_context_pack(
+        self,
+        workspace_ref: str,
+        *,
+        task_ref: str,
+        kind: str,
+        text: str,
+        support_refs: list[str],
+        agent_ref: str | None = None,
+    ) -> dict[str, Any]:
+        self.ensure_workspace(workspace_ref)
+        self.read_task(workspace_ref, task_ref)
+        if kind not in CONTEXT_KINDS:
+            raise ValidationError(f"unsupported_context_kind:{kind}")
+        if not text.strip():
+            raise ValidationError("context pack text must be non-empty")
+        if not support_refs:
+            raise ValidationError("context pack requires support_refs")
+        support = [self._context_support_snapshot(workspace_ref, ref) for ref in support_refs]
+        context_ref = new_id("CTX")
+        relative_md = f"artifacts/context_packs/{task_ref}/{context_ref}-{kind}.md"
+        relative_json = f"artifacts/context_packs/{task_ref}/{context_ref}.json"
+        artifact_path = self.workspace_dir(workspace_ref) / relative_md
+        metadata_path = self.workspace_dir(workspace_ref) / relative_json
+        record = {
+            "id": context_ref,
+            "record_type": "context_pack",
+            "workspace_ref": workspace_ref,
+            "task_ref": task_ref,
+            "kind": kind,
+            "format": "markdown",
+            "artifact_path": relative_md,
+            "metadata_path": relative_json,
+            "support_refs": support_refs,
+            "support_hash": canonical_hash(support),
+            "status": "active",
+            "created_by_agent": agent_ref,
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+        }
+        for existing in self.context_packs(workspace_ref, task_ref=task_ref, kind=kind, status="active"):
+            existing["status"] = "stale"
+            existing["stale_reason"] = "replaced_by_new_context_pack"
+            existing["updated_at"] = utc_now()
+            self._write_json(self.workspace_dir(workspace_ref) / existing["metadata_path"], existing)
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(text, encoding="utf-8")
+        self._write_json(metadata_path, record)
+        return record
+
+    def read_context_pack(self, workspace_ref: str, context_ref: str) -> dict[str, Any]:
+        for path in sorted((self.workspace_dir(workspace_ref) / "artifacts" / "context_packs").glob(f"*/{context_ref}.json")):
+            return read_json(path)
+        raise NotFoundError(f"context pack not found: {context_ref}")
+
+    def context_packs(
+        self,
+        workspace_ref: str,
+        *,
+        task_ref: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        base = self.workspace_dir(workspace_ref) / "artifacts" / "context_packs"
+        pattern = f"{task_ref}/CTX-*.json" if task_ref else "*/CTX-*.json"
+        records = [read_json(path) for path in sorted(base.glob(pattern))]
+        if kind is not None:
+            records = [record for record in records if record.get("kind") == kind]
+        if status is not None:
+            records = [record for record in records if record.get("status") == status]
+        return records
+
+    def revoke_context_pack(self, workspace_ref: str, context_ref: str, *, reason: str) -> dict[str, Any]:
+        record = self.read_context_pack(workspace_ref, context_ref)
+        record["status"] = "revoked"
+        record["revoke_reason"] = reason
+        record["updated_at"] = utc_now()
+        self._write_json(self.workspace_dir(workspace_ref) / record["metadata_path"], record)
+        return record
+
+    def context_pack_text(self, workspace_ref: str, context_ref: str) -> str:
+        record = self.read_context_pack(workspace_ref, context_ref)
+        return (self.workspace_dir(workspace_ref) / record["artifact_path"]).read_text(encoding="utf-8")
+
+    def _context_support_snapshot(self, workspace_ref: str, ref: str) -> dict[str, Any]:
+        if ref.startswith("CLM-"):
+            claim = self.read_claim(workspace_ref, ref)
+            if not self.claim_visible_in_workspace(workspace_ref, claim):
+                raise ValidationError(f"context_support_not_visible:{ref}")
+            return {"ref": ref, "hash": canonical_hash(claim), "record_type": "claim"}
+        if ref.startswith("SRC-"):
+            source = self.read_source(workspace_ref, ref)
+            if not self.source_visible_in_workspace(workspace_ref, source):
+                raise ValidationError(f"context_support_not_visible:{ref}")
+            return {"ref": ref, "hash": canonical_hash(source), "record_type": "source"}
+        raise ValidationError(f"unsupported_context_support_ref:{ref}")
 
     def attach_agent_to_task(self, workspace_ref: str, agent_ref: str, task_ref: str) -> dict[str, Any]:
         agent = self.read_agent(workspace_ref, agent_ref)

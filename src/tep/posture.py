@@ -205,6 +205,8 @@ class PostureService:
             return "proof_capable_when_accepted"
         if record_type == "run":
             return "protected_action_evidence_after_capture"
+        if record_type == "context_pack":
+            return "task_scoped_guidance"
         if record_type in {"task", "agent", "project", "workspace"}:
             return "coordination_or_scope"
         return "navigation_only"
@@ -234,4 +236,6 @@ class PostureService:
                 "open_act_ref": record.get("open_act_ref"),
                 "action_hash": record.get("action_hash"),
             }
+        if record.get("record_type") == "context_pack":
+            return {"task_ref": record.get("task_ref"), "support_refs": record.get("support_refs", [])}
         return {}

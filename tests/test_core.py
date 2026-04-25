@@ -27,6 +27,16 @@ from tep.mcp_stdio_server import TEPMCPStdioServer
 
 
 class CoreTests(unittest.TestCase):
+    def _compile_task_briefing(self, runtime: Runtime, workspace_ref: str, task_ref: str, support_ref: str) -> None:
+        compiled = runtime.compile_context_pack(
+            workspace_ref,
+            task_ref=task_ref,
+            kind="task_briefing",
+            text="# Task Briefing\nUse the ledgered support for this task.\n",
+            support_refs=[support_ref],
+        )
+        self.assertTrue(compiled.ok, compiled.error)
+
     def test_canonical_json_rejects_floats(self) -> None:
         with self.assertRaises(CanonicalJSONError):
             canonical_dumps({"score": 0.5})
@@ -73,6 +83,49 @@ class CoreTests(unittest.TestCase):
             bad = runtime.update_settings({"enforcement": {"mode": "chaos"}}, workspace_ref=workspace["id"])
             self.assertFalse(bad.ok)
             self.assertIn("unsupported_enforcement_mode", bad.error["message"])
+
+    def test_context_packs_are_task_scoped_text_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            task = runtime.create_task(workspace["id"], "Implement feature").data["task"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Use compact code and keep tests focused.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            claim = runtime.create_claim(workspace["id"], "Keep tests focused.", source_refs=[source["id"]]).data["claim"]
+
+            compiled = runtime.compile_context_pack(
+                workspace["id"],
+                task_ref=task["id"],
+                kind="coding_guidelines",
+                text="# Coding Guidelines\nKeep tests focused.\n",
+                support_refs=[claim["id"]],
+            )
+
+            self.assertTrue(compiled.ok, compiled.error)
+            pack = compiled.data["context_pack"]
+            self.assertTrue(pack["id"].startswith("CTX-"))
+            self.assertEqual(pack["kind"], "coding_guidelines")
+            self.assertEqual(Path(tmp, "workspaces", workspace["id"], pack["artifact_path"]).read_text(encoding="utf-8"), "# Coding Guidelines\nKeep tests focused.\n")
+
+            listed = runtime.list_context_packs(workspace["id"], task_ref=task["id"])
+            self.assertTrue(listed.ok, listed.error)
+            self.assertEqual([item["id"] for item in listed.data["context_packs"]], [pack["id"]])
+
+            revoked = runtime.revoke_context_pack(workspace["id"], pack["id"], reason="superseded")
+            self.assertTrue(revoked.ok, revoked.error)
+            self.assertEqual(revoked.data["context_pack"]["status"], "revoked")
 
     def test_append_and_validate_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -504,6 +557,81 @@ class CoreTests(unittest.TestCase):
             self.assertIsNone(closed.ledger_pressure["open_act"])
             self.assertTrue(closed.ledger_pressure["ledger_valid"])
 
+    def test_strict_task_context_gate_blocks_act_until_all_required_packs_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            runtime.update_settings({"enforcement": {"mode": "strict"}}, workspace_ref=workspace["id"])
+            task = runtime.create_task(workspace["id"], "Implement with context").data["task"]
+            identity = generate_agent_identity("context-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            runtime.attach_agent_to_task(workspace["id"], agent["id"], task["id"])
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="This task has required guidance.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            claim = runtime.create_claim(workspace["id"], "Task guidance exists.", source_refs=[source["id"]]).data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot before context-gated ACT.",
+                difficulty_bits=8,
+            )
+
+            blocked = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Try protected work before context.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+
+            self.assertFalse(blocked.ok)
+            self.assertIn("missing_task_context", blocked.error["message"])
+
+            for kind in ("task_briefing", "coding_guidelines", "domain_theory", "project_conventions"):
+                compiled = runtime.compile_context_pack(
+                    workspace["id"],
+                    task_ref=task["id"],
+                    kind=kind,
+                    text=f"# {kind}\nUse this context.\n",
+                    support_refs=[claim["id"]],
+                    agent_ref=agent["id"],
+                )
+                self.assertTrue(compiled.ok, compiled.error)
+
+            brief = runtime.brief_current_context(workspace["id"], agent["id"])
+            self.assertTrue(brief.ok, brief.error)
+            self.assertEqual(brief.data["compiled_context"]["execution_state"], "ready")
+            self.assertEqual(len(brief.data["compiled_context"]["active"]), 4)
+
+            opened = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Protected work after context.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            self.assertTrue(opened.ok, opened.error)
+
     def test_protected_action_preflight_requires_open_matching_act(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -846,6 +974,7 @@ class CoreTests(unittest.TestCase):
                 why="Ledger scope bridge.",
                 difficulty_bits=8,
             )
+            self._compile_task_briefing(runtime, workspace["id"], task["id"], primary_claim["id"])
 
             allowed = runtime.final_answer_preflight(
                 workspace_ref=workspace["id"],
@@ -1077,6 +1206,7 @@ class CoreTests(unittest.TestCase):
                 why="Ledger task bridge.",
                 difficulty_bits=8,
             )
+            self._compile_task_briefing(runtime, workspace["id"], task["id"], primary_claim["id"])
 
             allowed = runtime.final_answer_preflight(workspace_ref=workspace["id"], agent_ref=agent["id"], task_ref=task["id"], support_refs=[example_claim["id"]])
             blocked = runtime.final_answer_preflight(workspace_ref=workspace["id"], agent_ref=agent["id"], task_ref=other_task["id"], support_refs=[example_claim["id"]])
@@ -1431,6 +1561,40 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertIn("Open an ACT", output["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_codex_hook_blocks_task_bash_when_required_context_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            runtime = Runtime(store)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            store.update_settings({"enforcement": {"mode": "strict", "bash_policy": "classify"}}, workspace_ref=workspace["id"])
+            task = store.create_task(workspace["id"], "Do task-bound work")
+            identity = generate_agent_identity("hook-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            runtime.attach_agent_to_task(workspace["id"], agent["id"], task["id"])
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env["TEP_AGENT_REF"] = agent["id"]
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "rg -n settings src"}}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertIn("missing_context", output["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_codex_hook_allows_strict_bash_when_single_open_act_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
@@ -1635,6 +1799,9 @@ class CoreTests(unittest.TestCase):
             self.assertIn("read_settings", tool_names)
             self.assertIn("update_settings", tool_names)
             self.assertIn("action_pressure", tool_names)
+            self.assertIn("compile_context_pack", tool_names)
+            self.assertIn("list_context_packs", tool_names)
+            self.assertIn("revoke_context_pack", tool_names)
 
             missing = adapter.call_tool("create_workspace", {})
             self.assertFalse(missing["ok"])
@@ -1817,6 +1984,17 @@ class CoreTests(unittest.TestCase):
                     "difficulty_bits": 8,
                 },
             )
+            call(
+                "compile_context_pack",
+                {
+                    "workspace_ref": workspace["id"],
+                    "task_ref": task["id"],
+                    "kind": "task_briefing",
+                    "text": "# Task Briefing\nUse the ledgered final support.\n",
+                    "support_refs": [claim["id"]],
+                    "agent_ref": agent["id"],
+                },
+            )
             final = call(
                 "final_answer_preflight",
                 {
@@ -1868,7 +2046,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.6")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.7")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}

@@ -25,8 +25,10 @@ DEFAULT_SETTINGS = {
         "edit_policy": "act_required",
         "final_policy": "preflight_required",
         "unknown_action_policy": "block_until_act",
+        "context_requirements": {},
     },
 }
+CONTEXT_KINDS = ("task_briefing", "coding_guidelines", "domain_theory", "project_conventions")
 READ_ONLY_BASH = re.compile(
     r"^\s*(?:pwd|ls(?:\s|$)|find(?:\s|$)|rg(?:\s|$)|grep(?:\s|$)|sed\s+-n(?:\s|$)|cat(?:\s|$)|"
     r"head(?:\s|$)|tail(?:\s|$)|wc(?:\s|$)|nl(?:\s|$)|git\s+(?:status|diff|log|show|branch)(?:\s|$)|test\s+[-a-zA-Z](?:\s|$))"
@@ -257,6 +259,61 @@ def open_act_in_ledger(ledger_path: Path) -> str | None:
     return open_ref if isinstance(open_ref, str) else None
 
 
+def active_task_ref(pointer: dict, workspace: str | None) -> str | None:
+    explicit = os.environ.get("TEP_TASK_REF")
+    if explicit and explicit.startswith("TASK-"):
+        return explicit
+    agent_ref = os.environ.get("TEP_AGENT_REF")
+    if not workspace:
+        return None
+    home = tep_home(pointer)
+    agents = []
+    if agent_ref:
+        agents.append(read_json(home / "workspaces" / workspace / "agents" / agent_ref / "agent.json"))
+    else:
+        agents.extend(read_json(path) for path in sorted((home / "workspaces" / workspace / "agents").glob("AGENT-*/agent.json")))
+    task_refs = []
+    for agent in agents:
+        path = agent.get("working_context", {}).get("active_task_path", [])
+        if path:
+            task_refs.append(path[-1])
+    unique = sorted({ref for ref in task_refs if isinstance(ref, str) and ref.startswith("TASK-")})
+    return unique[0] if len(unique) == 1 else None
+
+
+def required_context_kinds(settings: dict[str, Any]) -> list[str]:
+    enforcement = settings.get("enforcement", {})
+    mode = enforcement.get("mode", "balanced")
+    if mode == "strict":
+        defaults = {kind: "required" for kind in CONTEXT_KINDS}
+    elif mode == "off":
+        defaults = {kind: "disabled" for kind in CONTEXT_KINDS}
+    else:
+        defaults = {
+            "task_briefing": "required",
+            "coding_guidelines": "on_demand",
+            "domain_theory": "on_demand",
+            "project_conventions": "on_demand",
+        }
+    defaults.update(enforcement.get("context_requirements", {}))
+    return [kind for kind in CONTEXT_KINDS if defaults.get(kind) == "required"]
+
+
+def missing_task_context(pointer: dict, workspace: str | None, task_ref: str | None, settings: dict[str, Any]) -> list[str]:
+    if not workspace or not task_ref:
+        return []
+    required = required_context_kinds(settings)
+    if not required:
+        return []
+    base = tep_home(pointer) / "workspaces" / workspace / "artifacts" / "context_packs" / task_ref
+    active = {
+        record.get("kind")
+        for path in sorted(base.glob("CTX-*.json"))
+        if (record := read_json(path)).get("status") == "active"
+    }
+    return [kind for kind in required if kind not in active]
+
+
 def bash_pressure(settings: dict[str, Any], classification: str, act_ref: str | None) -> dict[str, Any]:
     enforcement = settings.get("enforcement", {})
     mode = enforcement.get("mode", "balanced")
@@ -433,6 +490,14 @@ def handle_pre_bash(payload: dict) -> int:
         return 0
     wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
     settings = read_settings_for(pointer, wsp)
+    missing_context = missing_task_context(pointer, wsp, active_task_ref(pointer, wsp), settings)
+    if missing_context:
+        emit_deny(
+            "Task work is blocked until required TEP context packs exist. "
+            f"missing_context={','.join(missing_context)}. "
+            "Use lookup_facts and compile_context_pack before running task-bound Bash."
+        )
+        return 0
     pressure = bash_pressure(settings, classify_bash(command), open_act_ref(pointer, wsp))
     if pressure["blocked"]:
         emit_deny(

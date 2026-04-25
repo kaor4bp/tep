@@ -10,6 +10,9 @@ from .errors import ValidationError
 from .responses import move
 
 
+CONTEXT_KINDS = ("task_briefing", "coding_guidelines", "domain_theory", "project_conventions")
+CONTEXT_REQUIREMENT_LEVELS = {"required", "on_demand", "optional", "disabled"}
+
 DEFAULT_SETTINGS: dict[str, Any] = {
     "version": 1,
     "enforcement": {
@@ -19,6 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "edit_policy": "act_required",
         "final_policy": "preflight_required",
         "unknown_action_policy": "block_until_act",
+        "context_requirements": {},
     },
 }
 
@@ -75,6 +79,37 @@ def validate_settings(settings: dict[str, Any]) -> None:
         raise ValidationError("unsupported_unknown_action_policy")
     if not isinstance(enforcement.get("session_start_requires_frame"), bool):
         raise ValidationError("session_start_requires_frame must be boolean")
+    context_requirements = enforcement.get("context_requirements", {})
+    if not isinstance(context_requirements, dict):
+        raise ValidationError("context_requirements must be an object")
+    for kind, level in context_requirements.items():
+        if kind not in CONTEXT_KINDS:
+            raise ValidationError(f"unsupported_context_kind:{kind}")
+        if level not in CONTEXT_REQUIREMENT_LEVELS:
+            raise ValidationError(f"unsupported_context_requirement:{level}")
+
+
+def context_requirements(settings: dict[str, Any]) -> dict[str, str]:
+    enforcement = settings["enforcement"]
+    mode = enforcement["mode"]
+    if mode == "strict":
+        defaults = {kind: "required" for kind in CONTEXT_KINDS}
+    elif mode == "off":
+        defaults = {kind: "disabled" for kind in CONTEXT_KINDS}
+    else:
+        defaults = {
+            "task_briefing": "required",
+            "coding_guidelines": "on_demand",
+            "domain_theory": "on_demand",
+            "project_conventions": "on_demand",
+        }
+    defaults.update(enforcement.get("context_requirements", {}))
+    return defaults
+
+
+def required_context_kinds(settings: dict[str, Any]) -> list[str]:
+    requirements = context_requirements(settings)
+    return [kind for kind in CONTEXT_KINDS if requirements.get(kind) == "required"]
 
 
 def classify_action(action_kind: str, action: dict[str, Any]) -> dict[str, Any]:

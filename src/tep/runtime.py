@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .crypto import AgentIdentity, assert_private_key_matches, generate_agent_identity
-from .enforcement import action_pressure as compute_action_pressure
+from .enforcement import action_pressure as compute_action_pressure, context_requirements, required_context_kinds
 from .errors import OwnershipError, TEPError, ValidationError
 from .indexes import IndexService
 from .ingest import ingest_file_payload, ingest_text_payload
@@ -200,6 +200,53 @@ class Runtime:
                 ],
             )
         )
+
+    def compile_context_pack(
+        self,
+        workspace_ref: str,
+        *,
+        task_ref: str,
+        kind: str,
+        text: str,
+        support_refs: list[str],
+        agent_ref: str | None = None,
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            pack = self.store.create_context_pack(
+                workspace_ref,
+                task_ref=task_ref,
+                kind=kind,
+                text=text,
+                support_refs=support_refs,
+                agent_ref=agent_ref,
+            )
+            return ok_response(
+                {"context_pack": pack, "task_context": self._task_context_state(workspace_ref, task_ref)},
+                valid_moves=[
+                    move("brief", "brief_current_context", "Refresh briefing with active context packs."),
+                    move("detail", "record_detail", "Inspect compiled context pack."),
+                ],
+            )
+
+        return self._guard(op)
+
+    def list_context_packs(self, workspace_ref: str, *, task_ref: str | None = None) -> RuntimeResponse:
+        return self._guard(
+            lambda: ok_response(
+                {"context_packs": self.store.context_packs(workspace_ref, task_ref=task_ref)},
+                valid_moves=[move("brief", "brief_current_context", "Use active context packs for task guidance.")],
+            )
+        )
+
+    def revoke_context_pack(self, workspace_ref: str, context_ref: str, *, reason: str) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            pack = self.store.revoke_context_pack(workspace_ref, context_ref, reason=reason)
+            return ok_response(
+                {"context_pack": pack, "task_context": self._task_context_state(workspace_ref, pack["task_ref"])},
+                valid_moves=[move("mutate_record", "compile_context_pack", "Compile replacement context if still required.", writes=True)],
+            )
+
+        return self._guard(op)
 
     def create_source(self, workspace_ref: str, **kwargs: Any) -> RuntimeResponse:
         def op() -> RuntimeResponse:
@@ -547,6 +594,7 @@ class Runtime:
         difficulty_bits: int = 18,
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
+            self._require_task_context_ready(workspace_ref, agent_ref)
             ledger = Ledger(self.store, workspace_ref, agent_ref)
             result = ledger.open_probe(
                 private_key=private_key,
@@ -581,6 +629,7 @@ class Runtime:
         difficulty_bits: int = 18,
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
+            self._require_task_context_ready(workspace_ref, agent_ref)
             ledger = Ledger(self.store, workspace_ref, agent_ref)
             result = ledger.capture_probe_result(
                 private_key=private_key,
@@ -644,6 +693,7 @@ class Runtime:
         action: dict[str, Any],
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
+            self._require_task_context_ready(workspace_ref, agent_ref)
             agent = self.store.read_agent(workspace_ref, agent_ref)
             assert_private_key_matches(agent["public_key"], agent["key_fingerprint"], private_key)
             ledger = Ledger(self.store, workspace_ref, agent_ref)
@@ -892,6 +942,7 @@ class Runtime:
             agent = self.store.read_agent(workspace_ref, agent_ref) if agent_ref else None
             task_path = agent["working_context"]["active_task_path"] if agent else []
             active_task = self.store.read_task(workspace_ref, task_path[-1]) if task_path else None
+            task_context = self._task_context_state(workspace_ref, active_task["id"]) if active_task else None
             deferred = [task["id"] for task in self.store.tasks(workspace_ref) if task.get("status") == "deferred"]
             facts = [
                 {
@@ -914,11 +965,13 @@ class Runtime:
                     "task": {
                         "active_task_path": task_path,
                         "state": active_task.get("status") if active_task else "none",
+                        "execution_state": task_context["execution_state"] if task_context else "no_active_task",
                         "goal": active_task.get("goal") if active_task else None,
                         "done_criteria": active_task.get("done_criteria", []) if active_task else [],
                         "blocker_refs": active_task.get("blocker_refs", []) if active_task else [],
                         "deferred_work": deferred,
                     },
+                    "compiled_context": task_context,
                     "agent": {
                         "ref": agent_ref,
                         "selected_ledger_head": self._ledger_pressure(workspace_ref, agent_ref)["current_head"] if agent_ref else None,
@@ -974,6 +1027,10 @@ class Runtime:
             return self.store.read_task(workspace_ref, record_ref)
         if record_ref.startswith("RUN-"):
             return self.store.read_run(workspace_ref, record_ref)
+        if record_ref.startswith("CTX-"):
+            record = self.store.read_context_pack(workspace_ref, record_ref)
+            record["text"] = self.store.context_pack_text(workspace_ref, record_ref)
+            return record
         if record_ref.startswith("AGENT-"):
             return self.store.read_agent(workspace_ref, record_ref)
         if record_ref.startswith("PRJ-"):
@@ -1035,6 +1092,16 @@ class Runtime:
             blockers.append({"code": "ledger_invalid", "refs": [agent_ref], "why": "; ".join(validation.errors)})
         if validation.open_act is not None:
             blockers.append({"code": "open_act", "refs": [validation.open_act], "why": "final answer requires no open ACT"})
+        if task is not None:
+            task_context = self._task_context_state(workspace_ref, task["id"])
+            if task_context["missing_required"]:
+                blockers.append(
+                    {
+                        "code": "missing_task_context",
+                        "refs": [task["id"]],
+                        "why": ",".join(task_context["missing_required"]),
+                    }
+                )
 
         for claim_ref in support_refs:
             claim = self.store.read_claim(workspace_ref, claim_ref)
@@ -1082,6 +1149,8 @@ class Runtime:
             "blockers": blockers,
             "ledger_validation": validation.__dict__,
         }
+        if task is not None:
+            gate["task_context"] = self._task_context_state(workspace_ref, task["id"])
         gate["ledger_pressure"] = self._gate_ledger_pressure(agent_ref, gate)
         return gate
 
@@ -1151,7 +1220,51 @@ class Runtime:
             moves.append(move("brief", "brief_current_context", "Inspect task blockers."))
         if "agent_not_attached_to_task" in codes:
             moves.append(move("mutate_record", "attach_agent_to_task", "Attach current agent to task.", writes=True))
+        if "missing_task_context" in codes:
+            moves.append(move("lookup", "lookup_facts", "Collect CLM-* support for missing context packs."))
+            moves.append(move("mutate_record", "compile_context_pack", "Compile required CTX-* task context.", writes=True))
         return moves
+
+    def _task_context_state(self, workspace_ref: str, task_ref: str) -> dict[str, Any]:
+        settings = self.store.read_settings(workspace_ref)
+        requirements = context_requirements(settings)
+        required = required_context_kinds(settings)
+        packs = self.store.context_packs(workspace_ref, task_ref=task_ref, status="active")
+        active_by_kind = {pack["kind"]: pack for pack in packs}
+        missing = [kind for kind in required if kind not in active_by_kind]
+        return {
+            "task_ref": task_ref,
+            "requirements": requirements,
+            "required_kinds": required,
+            "active": [
+                {
+                    "ref": pack["id"],
+                    "kind": pack["kind"],
+                    "status": pack["status"],
+                    "path": str(self.store.workspace_dir(workspace_ref) / pack["artifact_path"]),
+                    "support_refs": pack.get("support_refs", []),
+                    "support_hash": pack.get("support_hash"),
+                }
+                for pack in sorted(packs, key=lambda item: (item["kind"], item["id"]))
+            ],
+            "missing_required": missing,
+            "execution_state": "ready" if not missing else "blocked_missing_context",
+            "valid_moves": [
+                move("lookup", "lookup_facts", "Collect facts for missing context packs."),
+                move("mutate_record", "compile_context_pack", "Compile required task context pack.", writes=True),
+            ]
+            if missing
+            else [move("brief", "brief_current_context", "Use active task context.")],
+        }
+
+    def _require_task_context_ready(self, workspace_ref: str, agent_ref: str) -> None:
+        agent = self.store.read_agent(workspace_ref, agent_ref)
+        task_path = agent.get("working_context", {}).get("active_task_path", [])
+        if not task_path:
+            return
+        state = self._task_context_state(workspace_ref, task_path[-1])
+        if state["missing_required"]:
+            raise ValidationError("missing_task_context:" + ",".join(state["missing_required"]))
 
     def _validate_relation_bases(
         self,

@@ -63,6 +63,8 @@ At the beginning of a TEP-backed task:
    survive the chat, call `capture_input`.
 9. Read the `settings.enforcement` block in the briefing. It controls whether
    Bash/edit actions are advisory, classified, or ACT-gated.
+10. If a task is active, check `compiled_context.execution_state`. Do not work
+    on the task until all required `CTX-*` packs exist.
 
 `AGENT-*` is a live thread/session, not a reusable personality. Do not continue
 another agent's ledger with this thread's key. Foreign ledgers are readable for
@@ -93,7 +95,13 @@ Default enforcement is `balanced`:
     "bash_policy": "capture_only|classify|act_for_evidence|act_for_all",
     "edit_policy": "advisory|act_required",
     "final_policy": "advisory|preflight_required",
-    "unknown_action_policy": "allow_with_pressure|block_until_act"
+    "unknown_action_policy": "allow_with_pressure|block_until_act",
+    "context_requirements": {
+      "task_briefing": "required|on_demand|optional|disabled",
+      "coding_guidelines": "required|on_demand|optional|disabled",
+      "domain_theory": "required|on_demand|optional|disabled",
+      "project_conventions": "required|on_demand|optional|disabled"
+    }
   }
 }
 ```
@@ -103,6 +111,35 @@ Before Bash or file edits, check the current briefing or call
 `open_probe -> protected_action_preflight -> execute -> capture_probe_result ->
 close_probe`. Hooks cannot open ACT for you because `agent_private_key` exists
 only in the agent's memory.
+
+Strict mode requires all base task context kinds unless overridden in settings:
+`task_briefing`, `coding_guidelines`, `domain_theory`, and
+`project_conventions`. Balanced mode requires `task_briefing` and leaves the
+others on demand by default.
+
+## Task Context Packs
+
+Task-scoped context is stored as plain text `CTX-*` markdown artifacts. Use
+separate files by kind so the agent can load only what it needs:
+
+- `task_briefing`
+- `coding_guidelines`
+- `domain_theory`
+- `project_conventions`
+
+Use typed tools:
+
+- `compile_context_pack`
+- `list_context_packs`
+- `revoke_context_pack`
+
+`compile_context_pack` takes selected `CLM-*`/`SRC-*` support refs and the
+agent-written markdown text. TEP writes metadata plus a `.md` file under the
+workspace artifacts directory and returns the file path in the briefing.
+Required context packs gate task execution: ACT opening, protected preflight,
+task-bound Bash, task completion, and task final preflight are blocked until
+required active packs exist. Setup operations such as lookup, source capture,
+claim creation, and context compilation remain available.
 
 ## Source Capture
 
