@@ -22,6 +22,7 @@ class MCPToolSpec:
     writes: bool
     description: str
     required: tuple[str, ...] = ()
+    optional: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -30,6 +31,7 @@ class MCPToolSpec:
             "writes": self.writes,
             "description": self.description,
             "required": list(self.required),
+            "optional": list(self.optional),
         }
 
 
@@ -98,11 +100,18 @@ class MCPAdapter:
                 self._action_pressure,
             ),
             "compile_context_pack": (
-                MCPToolSpec("compile_context_pack", "context", True, "Compile scoped CTX-* text guidance.", ("workspace_ref", "kind", "text", "support_refs")),
+                MCPToolSpec(
+                    "compile_context_pack",
+                    "context",
+                    True,
+                    "Compile scoped CTX-* text guidance. Pass task_ref when kind is task_briefing.",
+                    ("workspace_ref", "kind", "text", "support_refs"),
+                    ("task_ref", "project_ref", "agent_ref"),
+                ),
                 self._compile_context_pack,
             ),
             "list_context_packs": (
-                MCPToolSpec("list_context_packs", "context", False, "List scoped CTX-* guidance packs.", ("workspace_ref",)),
+                MCPToolSpec("list_context_packs", "context", False, "List scoped CTX-* guidance packs.", ("workspace_ref",), ("task_ref", "project_ref", "scope_type")),
                 self._list_context_packs,
             ),
             "revoke_context_pack": (
@@ -220,7 +229,7 @@ class MCPAdapter:
                 "error": {
                     "code": "missing_required_arguments",
                     "message": ",".join(missing),
-                    "details": {"required": list(spec.required)},
+                    "details": {"required": list(spec.required), "optional": list(spec.optional)},
                 },
                 "repair_options": [{"operation_kind": name, "why": "Call tool with required arguments."}],
             }
@@ -232,7 +241,7 @@ class MCPAdapter:
                 "error": {
                     "code": "invalid_arguments",
                     "message": str(exc),
-                    "details": {"tool": name, "required": list(spec.required)},
+                    "details": {"tool": name, "required": list(spec.required), "optional": list(spec.optional)},
                 },
                 "repair_options": [{"operation_kind": name, "why": "Call tool with valid typed arguments."}],
             }

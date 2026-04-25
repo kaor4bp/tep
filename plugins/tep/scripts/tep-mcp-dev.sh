@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 TEP_HOME="${TEP_HOME:-${HOME}/.tep}"
 
-if command -v tep-mcp >/dev/null 2>&1; then
-  exec tep-mcp --tep-home "${TEP_HOME}"
+if [[ -n "${TEP_MCP_BIN:-}" ]]; then
+  exec "${TEP_MCP_BIN}" --tep-home "${TEP_HOME}"
 fi
 
 if [[ ! -d "${REPO_ROOT}/src/tep" && -d "/Users/kaor4bp/PycharmProjects/tep/src/tep" ]]; then

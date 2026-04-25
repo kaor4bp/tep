@@ -1023,6 +1023,15 @@ class Runtime:
                     ],
                     repair_options=[move("mutate_record", "select_existing_claim", "Reuse existing claim.")],
                 )
+            if message == "task_briefing_requires_task_ref":
+                return error_response(
+                    "task_briefing_requires_task_ref",
+                    "compile_context_pack kind=task_briefing requires task_ref",
+                    repair_options=[
+                        move("brief", "brief_current_context", "Find the active TASK-* before compiling task briefing."),
+                        move("mutate_record", "compile_context_pack", "Retry with task_ref set to the target TASK-*.", writes=True),
+                    ],
+                )
             return error_response("validation_failed", message, repair_options=[move("brief", "brief_current_context", "Refresh protocol context.")])
         except TEPError as exc:
             return error_response("protocol_error", str(exc), repair_options=[move("validate", "validate_ledger", "Validate current protocol state.")])

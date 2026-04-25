@@ -11,14 +11,15 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, TextIO
+import traceback
+from typing import Any, BinaryIO, TextIO
 
 from .mcp_adapter import MCPAdapter
 from .runtime import Runtime
 from .storage import TEPHome
 
 
-SERVER_VERSION = "0.6.8"
+SERVER_VERSION = "0.6.9"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 
@@ -39,7 +40,8 @@ def _property_schema(name: str) -> JsonObject:
 
 def _tool_schema(tool: JsonObject) -> JsonObject:
     required = list(tool.get("required", []))
-    properties = {name: _property_schema(name) for name in required}
+    optional = list(tool.get("optional", []))
+    properties = {name: _property_schema(name) for name in [*required, *optional]}
     return {
         "type": "object",
         "properties": properties,
@@ -127,35 +129,104 @@ class TEPMCPStdioServer:
         return method_not_found(message_id, method)
 
 
-def emit(message: JsonObject | list[JsonObject], stdout: TextIO = sys.stdout) -> None:
-    stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
+def emit(message: JsonObject | list[JsonObject], stdout: TextIO = sys.stdout, *, framed: bool = False) -> None:
+    payload = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+    if framed:
+        body = payload.encode("utf-8")
+        stdout.write(f"Content-Length: {len(body)}\r\n\r\n{payload}")
+    else:
+        stdout.write(payload + "\n")
     stdout.flush()
 
 
+def emit_bytes(message: JsonObject | list[JsonObject], stdout: BinaryIO = sys.stdout.buffer, *, framed: bool = False) -> None:
+    body = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if framed:
+        stdout.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body)
+    else:
+        stdout.write(body + b"\n")
+    stdout.flush()
+
+
+def handle_decoded_message(server: TEPMCPStdioServer, message: Any) -> JsonObject | list[JsonObject] | None:
+    messages = message if isinstance(message, list) else [message]
+    results: list[JsonObject] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            results.append(invalid_request(None, "message must be an object"))
+            continue
+        try:
+            result = server.handle_message(item)
+        except Exception as exc:  # noqa: BLE001 - stdio MCP must not die on one bad tool call.
+            traceback.print_exc(file=sys.stderr)
+            result = response(item.get("id"), error={"code": -32603, "message": f"Internal error: {exc}"})
+        if result is not None:
+            results.append(result)
+    if isinstance(message, list):
+        return results or None
+    return results[0] if results else None
+
+
 def run_loop(server: TEPMCPStdioServer, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
-    for line in stdin:
+    while True:
+        line = stdin.readline()
+        if line == "":
+            break
         line = line.strip()
         if not line:
             continue
+        framed = line.casefold().startswith("content-length:")
         try:
-            message = json.loads(line)
+            if framed:
+                length = int(line.split(":", 1)[1].strip())
+                while True:
+                    header = stdin.readline()
+                    if header in {"", "\n", "\r\n"}:
+                        break
+                raw_message = stdin.read(length)
+            else:
+                raw_message = line
+            message = json.loads(raw_message)
         except json.JSONDecodeError as exc:
-            emit(response(None, error={"code": -32700, "message": f"Parse error: {exc}"}), stdout)
+            emit(response(None, error={"code": -32700, "message": f"Parse error: {exc}"}), stdout, framed=framed)
             continue
-        messages = message if isinstance(message, list) else [message]
-        results: list[JsonObject] = []
-        for item in messages:
-            if not isinstance(item, dict):
-                results.append(invalid_request(None, "message must be an object"))
-                continue
-            result = server.handle_message(item)
-            if result is not None:
-                results.append(result)
-        if isinstance(message, list):
-            if results:
-                emit(results, stdout)
-        elif results:
-            emit(results[0], stdout)
+        except (OSError, ValueError) as exc:
+            emit(response(None, error={"code": -32600, "message": f"Invalid MCP frame: {exc}"}), stdout, framed=framed)
+            continue
+        result = handle_decoded_message(server, message)
+        if result is not None:
+            emit(result, stdout, framed=framed)
+
+
+def run_loop_binary(server: TEPMCPStdioServer, stdin: BinaryIO = sys.stdin.buffer, stdout: BinaryIO = sys.stdout.buffer) -> None:
+    while True:
+        line = stdin.readline()
+        if line == b"":
+            break
+        line = line.strip()
+        if not line:
+            continue
+        framed = line.lower().startswith(b"content-length:")
+        try:
+            if framed:
+                length = int(line.split(b":", 1)[1].strip())
+                while True:
+                    header = stdin.readline()
+                    if header in {b"", b"\n", b"\r\n"}:
+                        break
+                raw_message = stdin.read(length).decode("utf-8")
+            else:
+                raw_message = line.decode("utf-8")
+            message = json.loads(raw_message)
+        except json.JSONDecodeError as exc:
+            emit_bytes(response(None, error={"code": -32700, "message": f"Parse error: {exc}"}), stdout, framed=framed)
+            continue
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            emit_bytes(response(None, error={"code": -32600, "message": f"Invalid MCP frame: {exc}"}), stdout, framed=framed)
+            continue
+        result = handle_decoded_message(server, message)
+        if result is not None:
+            emit_bytes(result, stdout, framed=framed)
 
 
 def make_mcp_server(tep_home: str | os.PathLike[str] = "~/.tep") -> TEPMCPStdioServer:
@@ -166,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="tep-mcp")
     parser.add_argument("--tep-home", default=os.environ.get("TEP_HOME", "~/.tep"))
     args = parser.parse_args(argv)
-    run_loop(make_mcp_server(args.tep_home))
+    run_loop_binary(make_mcp_server(args.tep_home))
 
 
 if __name__ == "__main__":

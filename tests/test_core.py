@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import subprocess
 import sys
@@ -24,6 +25,8 @@ from tep.crypto import public_key_from_private
 from tep.errors import CanonicalJSONError, OwnershipError, StorageError, ValidationError
 from tep.jsoncanon import bytes_hash, canonical_dumps
 from tep.mcp_stdio_server import TEPMCPStdioServer
+from tep.mcp_stdio_server import run_loop_binary as run_mcp_loop_binary
+from tep.mcp_stdio_server import run_loop as run_mcp_loop
 
 
 class CoreTests(unittest.TestCase):
@@ -1962,6 +1965,8 @@ class CoreTests(unittest.TestCase):
             self.assertIn("compile_context_pack", tool_names)
             self.assertIn("list_context_packs", tool_names)
             self.assertIn("revoke_context_pack", tool_names)
+            compile_tool = next(tool for tool in adapter.list_tools() if tool["name"] == "compile_context_pack")
+            self.assertIn("task_ref", compile_tool["optional"])
 
             missing = adapter.call_tool("create_workspace", {})
             self.assertFalse(missing["ok"])
@@ -2206,12 +2211,14 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.8")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.9")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             self.assertIn("generate_agent_identity", tool_names)
             self.assertIn("append_ledger", tool_names)
+            compile_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "compile_context_pack")
+            self.assertIn("task_ref", compile_tool["inputSchema"]["properties"])
 
             called = server.handle_message(
                 {
@@ -2230,6 +2237,65 @@ class CoreTests(unittest.TestCase):
                 {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "raw_json_write"}}
             )
             self.assertTrue(unknown["result"]["isError"])
+
+            bad_briefing = server.handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "compile_context_pack",
+                        "arguments": {
+                            "workspace_ref": "WSP-missing",
+                            "kind": "task_briefing",
+                            "text": "# Brief\n",
+                            "support_refs": ["CLM-missing"],
+                        },
+                    },
+                }
+            )
+            self.assertTrue(bad_briefing["result"]["isError"])
+            self.assertIn("task_ref", bad_briefing["result"]["content"][0]["text"])
+
+    def test_mcp_stdio_server_supports_content_length_framing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = TEPMCPStdioServer(MCPAdapter(Runtime(TEPHome(tmp))))
+            message = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
+            stdin = io.StringIO(f"Content-Length: {len(message.encode('utf-8'))}\r\n\r\n{message}")
+            stdout = io.StringIO()
+
+            run_mcp_loop(server, stdin=stdin, stdout=stdout)
+
+            raw = stdout.getvalue()
+            self.assertTrue(raw.startswith("Content-Length: "), raw)
+            body = raw.split("\r\n\r\n", 1)[1]
+            response = json.loads(body)
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.9")
+
+    def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = TEPMCPStdioServer(MCPAdapter(Runtime(TEPHome(tmp))))
+            message = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "create_workspace", "arguments": {"name": "проект"}},
+                },
+                ensure_ascii=False,
+            )
+            body = message.encode("utf-8")
+            stdin = io.BytesIO(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body)
+            stdout = io.BytesIO()
+
+            run_mcp_loop_binary(server, stdin=stdin, stdout=stdout)
+
+            raw = stdout.getvalue()
+            self.assertTrue(raw.startswith(b"Content-Length: "), raw)
+            response = json.loads(raw.split(b"\r\n\r\n", 1)[1].decode("utf-8"))
+            payload = json.loads(response["result"]["content"][0]["text"])
+            self.assertTrue(payload["ok"], payload.get("error"))
+            self.assertEqual(payload["data"]["workspace"]["name"], "проект")
 
     def test_init_project_pointer_registers_project_and_writes_dot_tep(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
