@@ -1507,7 +1507,7 @@ class Runtime:
             return []
         normalized = " ".join(statement.split())
         words = normalized.split()
-        sentence_count = sum(1 for part in re.split(r"[.!?]+", normalized) if part.strip())
+        sentence_count = sum(1 for part in re.split(r"[.!?]+(?=\s|$)", normalized) if part.strip())
         separators = normalized.count(";") + normalized.count(":") + normalized.count(",")
         connectors = sum(
             1

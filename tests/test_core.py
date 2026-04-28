@@ -786,6 +786,39 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(observation_act.ok)
             self.assertIn("act_target_observation_only", observation_act.error["message"])
 
+    def test_open_probe_allows_hostname_probe_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("probe-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            claim = runtime.create_claim(
+                workspace["id"],
+                "bridge.qa.trgdev.local resolves in the Codex execution environment.",
+            ).data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot narrow DNS probe hypothesis.",
+                difficulty_bits=8,
+            )
+
+            opened = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Check DNS resolution for bridge.qa.trgdev.local.",
+                allowed_action_kind="bash",
+                expected_evidence="DNS lookup command output",
+                difficulty_bits=8,
+            )
+
+            self.assertTrue(opened.ok, opened.error)
+            self.assertEqual(opened.data["ledger_row"]["kind"], "act")
+
     def test_protected_action_preflight_rejects_expired_act(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2349,6 +2382,57 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
             self.assertIn("ACT-bound", output["hookSpecificOutput"]["additionalContext"])
 
+    def test_codex_hook_uses_unique_open_act_without_agent_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            runtime = Runtime(store)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            store.update_settings({"enforcement": {"mode": "strict", "bash_policy": "act_for_all"}}, workspace_ref=workspace["id"])
+            identity = generate_agent_identity("hook-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            claim = runtime.create_claim(workspace["id"], "Resolve bridge.qa.trgdev.local.").data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot before strict hook probe.",
+                difficulty_bits=8,
+            )
+            runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Allow DNS smoke command.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_AGENT_REF", None)
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "python -c 'print(1)'"}},),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
+            self.assertIn("ACT-bound", output["hookSpecificOutput"]["additionalContext"])
+
     def test_secret_input_is_encrypted_not_redacted_or_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2845,7 +2929,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.23")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.24")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2904,7 +2988,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.23")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.24")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

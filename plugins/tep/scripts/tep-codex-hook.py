@@ -247,11 +247,19 @@ def open_act_ref(pointer: dict, workspace: str | None, settings: dict[str, Any] 
     if explicit and explicit.startswith("L-"):
         return explicit
     agent_ref = os.environ.get("TEP_AGENT_REF")
-    if not workspace or not agent_ref:
+    if not workspace:
         return None
     home = tep_home(pointer)
     timeout = int((settings or DEFAULT_SETTINGS).get("enforcement", {}).get("act_timeout_seconds", 3600))
-    return open_act_in_ledger(home / "workspaces" / workspace / "agents" / agent_ref / "ledger.jsonl", timeout_seconds=timeout)
+    if agent_ref:
+        return open_act_in_ledger(home / "workspaces" / workspace / "agents" / agent_ref / "ledger.jsonl", timeout_seconds=timeout)
+    open_refs = []
+    for ledger_path in sorted((home / "workspaces" / workspace / "agents").glob("AGENT-*/ledger.jsonl")):
+        open_ref = open_act_in_ledger(ledger_path, timeout_seconds=timeout)
+        if open_ref:
+            open_refs.append(open_ref)
+    unique = sorted(set(open_refs))
+    return unique[0] if len(unique) == 1 else None
 
 
 def open_act_in_ledger(ledger_path: Path, *, timeout_seconds: int = 3600) -> str | None:

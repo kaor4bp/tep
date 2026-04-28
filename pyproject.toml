@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trust-evidence-protocol"
-version = "0.6.23"
+version = "0.6.24"
 description = "Local fact protocol core for agent-owned sealed reasoning ledgers."
 readme = "README.md"
 requires-python = ">=3.11"
