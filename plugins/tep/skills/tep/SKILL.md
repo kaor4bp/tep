@@ -184,6 +184,40 @@ Create `CLM-*` records through `create_claim` or `link_claims`. TEP schemas do
 not store fixed claim status such as hypothesis/trusted/disputed. Public labels
 are runtime evaluations from relations, source classes, and support diversity.
 
+Why this matters: TEP is how you keep what you learn about the concrete system
+from evaporating when the chat moves on or another agent joins. Do not only
+record that a command ran. Record durable system knowledge: behavior, contracts,
+implementation facts, constraints, failure modes, assumptions, and verified
+corrections.
+
+Use this mental model:
+
+- Observation: captured evidence from a user message, file, command, test, log,
+  artifact, URL, or MCP result. It belongs in `SRC-*`/`RUN-*` first. By itself,
+  it is evidence, not a reusable system fact.
+- Claim/fact candidate: a `CLM-*` statement of what the observation means about
+  the system. Good CLM examples are narrow: “module X reads setting Y from
+  file Z”, “test A fails because API B returns 500”, “flow C requires D before
+  E”. Avoid mechanical CLM such as “command exited with code 0”.
+- Hypothesis: a `CLM-*` whose trust posture is still weak or exploratory. It
+  must be grounded in observations, trusted facts, or user-confirmed working
+  assumptions, and it must not become the basis for another hypothesis.
+- Trusted fact: a derived runtime posture, not stored status. A CLM becomes
+  answer/protected-action usable only through sufficient source support,
+  relation support, user confirmation, and ledger posture.
+- Relation: a `CLM-*` edge explaining how claims connect: support,
+  contradiction, dependency, applicability, equivalence, duplicate, induction,
+  deduction, abduction, assumption, possible relation, or freshness challenge.
+
+When you learn something, ask:
+
+1. What did I observe?
+2. What system fact does that imply?
+3. Is it a fact, a hypothesis, or a freshness challenge?
+4. What source supports it?
+5. Does it need a relation to existing CLM-*?
+6. Should it be split into smaller point facts?
+
 Rules:
 
 - A runtime-only claim remains hypothesis-like even if repeated many times.
