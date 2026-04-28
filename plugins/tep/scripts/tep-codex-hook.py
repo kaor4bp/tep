@@ -511,10 +511,50 @@ def response_text(payload: dict, stream: str) -> str:
     return ""
 
 
-def command_observation_statement(command: str, code: int) -> str:
+def compact_command(command: str, limit: int = 160) -> str:
     compact = " ".join(command.split())
-    if len(compact) > 160:
-        compact = compact[:157] + "..."
+    if len(compact) > limit:
+        compact = compact[: limit - 3] + "..."
+    return compact
+
+
+def first_meaningful_output_line(output: str) -> str:
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if set(stripped) <= {"=", "-", "_", "."}:
+            continue
+        return stripped[:220]
+    return ""
+
+
+def pytest_summary(output: str) -> tuple[str | None, list[str]]:
+    summary = None
+    failed: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        match = re.search(r"=+\s*(?P<summary>.*?(?:failed|passed|error|errors|skipped|xfailed|xpassed|deselected).*?)\s+in\s+[0-9.]+s\s*=+", stripped)
+        if match:
+            summary = " ".join(match.group("summary").split())
+        if stripped.startswith("FAILED "):
+            failed.append(stripped.removeprefix("FAILED ").split(" - ", 1)[0][:180])
+    return summary, failed[:5]
+
+
+def command_observation_statement(command: str, code: int, stdout: str = "", stderr: str = "") -> str:
+    compact = compact_command(command)
+    combined = "\n".join(part for part in [stdout, stderr] if part)
+    if re.search(r"(^|\s)(pytest|py\.test)(\s|$)", command) or " pytest " in f" {command} ":
+        summary, failed = pytest_summary(combined)
+        if summary:
+            statement = f"Pytest command `{compact}` completed with exit code {code}: {summary}."
+            if failed:
+                statement += " Failed tests: " + "; ".join(failed) + "."
+            return statement
+    first_line = first_meaningful_output_line(combined)
+    if first_line:
+        return f"Command `{compact}` exited with code {code}; first output line: {first_line}"
     return f"Command `{compact}` exited with code {code}."
 
 
@@ -607,7 +647,7 @@ def handle_post_bash(payload: dict) -> int:
         run = captured.get("data", {}).get("run") if isinstance(captured, dict) and captured.get("ok") else None
         if not isinstance(run, dict):
             return 0
-        statement = command_observation_statement(command, code)
+        statement = command_observation_statement(command, code, stdout=stdout, stderr=stderr)
         source_response = None
         if stdout:
             source_response = call_tep(pointer, "capture_run_output_source", {"workspace_ref": wsp, "run_ref": run["id"], "stream": "stdout"})

@@ -1698,6 +1698,52 @@ class CoreTests(unittest.TestCase):
             claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
             self.assertEqual(len(claims), 1)
 
+    def test_codex_hook_creates_semantic_pytest_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            env["TEP_REPO_ROOT"] = str(Path(__file__).resolve().parents[1])
+            stdout = "\n".join(
+                [
+                    "FAILED tests/test_api.py::test_returns_200 - AssertionError: 500 != 200",
+                    "FAILED tests/test_auth.py::test_login - RuntimeError: bad token",
+                    "=================== 2 failed, 3 passed, 1 skipped in 12.34s ===================",
+                ]
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "post-bash"],
+                input=json.dumps(
+                    {
+                        "cwd": str(project_root),
+                        "tool_input": {"command": "pytest tests -q"},
+                        "tool_response": {"exit_code": 1, "stdout": stdout},
+                    }
+                ),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
+            self.assertEqual(len(claims), 1)
+            claim = json.loads(claims[0].read_text(encoding="utf-8"))
+            self.assertIn("2 failed, 3 passed, 1 skipped", claim["statement"])
+            self.assertIn("tests/test_api.py::test_returns_200", claim["statement"])
+            self.assertNotEqual(claim["statement"], "Command `pytest tests -q` exited with code 1.")
+
     def test_codex_hook_blocks_bash_when_strict_settings_require_act(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
@@ -2266,7 +2312,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.10")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.11")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2325,7 +2371,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.10")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.11")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
