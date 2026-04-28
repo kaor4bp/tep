@@ -1489,7 +1489,7 @@ class Runtime:
             raise ValidationError("act_target_observation_only")
 
     def _require_open_act_fresh(self, workspace_ref: str, open_act: dict[str, Any]) -> None:
-        timeout = int(self.store.read_settings(workspace_ref)["enforcement"].get("act_timeout_seconds", 3600))
+        timeout = int(self.store.read_settings(workspace_ref)["enforcement"].get("act_timeout_seconds", 300))
         created_at = open_act.get("created_at")
         if not isinstance(created_at, str):
             raise ValidationError("open_act_expired:missing_created_at")

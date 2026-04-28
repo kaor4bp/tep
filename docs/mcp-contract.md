@@ -582,11 +582,12 @@ return `act_target_too_broad`; pure observation targets return
 `act_target_observation_only`.
 
 `protected_action_preflight`
-: Validate that a protected action matches the current open ACT. Returns an
-action token/id bound to ACT, action kind, command/action hash, cwd/scope, and
-expiry. The open ACT must still be fresh under
-`settings.enforcement.act_timeout_seconds`; expired ACTs return
-`open_act_expired` and should be closed or replaced with a fresh ACT.
+: Optionally validate that a protected action matches the current open ACT in a
+stricter/audited flow. Returns an action token/id bound to ACT, action kind,
+command/action hash, cwd/scope, and expiry. Default hook admission does not
+require this step; it checks that a matching ACT is open and still fresh under
+`settings.enforcement.act_timeout_seconds` (default 300 seconds). Expired ACTs
+return `open_act_expired` and should be closed or replaced with a fresh ACT.
 
 `record_run`
 : Record a `RUN-*` for an executed command/tool/action. It must link to the

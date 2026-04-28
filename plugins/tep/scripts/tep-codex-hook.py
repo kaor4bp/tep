@@ -26,7 +26,7 @@ DEFAULT_SETTINGS = {
         "edit_policy": "act_required",
         "final_policy": "preflight_required",
         "unknown_action_policy": "block_until_act",
-        "act_timeout_seconds": 3600,
+        "act_timeout_seconds": 300,
         "context_requirements": {},
     },
 }
@@ -250,7 +250,7 @@ def open_act_ref(pointer: dict, workspace: str | None, settings: dict[str, Any] 
     if not workspace:
         return None
     home = tep_home(pointer)
-    timeout = int((settings or DEFAULT_SETTINGS).get("enforcement", {}).get("act_timeout_seconds", 3600))
+    timeout = int((settings or DEFAULT_SETTINGS).get("enforcement", {}).get("act_timeout_seconds", 300))
     if agent_ref:
         return open_act_in_ledger(home / "workspaces" / workspace / "agents" / agent_ref / "ledger.jsonl", timeout_seconds=timeout)
     open_refs = []
@@ -262,7 +262,7 @@ def open_act_ref(pointer: dict, workspace: str | None, settings: dict[str, Any] 
     return unique[0] if len(unique) == 1 else None
 
 
-def open_act_in_ledger(ledger_path: Path, *, timeout_seconds: int = 3600) -> str | None:
+def open_act_in_ledger(ledger_path: Path, *, timeout_seconds: int = 300) -> str | None:
     rows = read_jsonl(ledger_path)
     open_ref = None
     open_created_at = None
@@ -661,7 +661,7 @@ def handle_pre_bash(payload: dict) -> int:
         emit_deny(
             "Bash action is blocked by TEP enforcement settings. "
             f"classification={pressure['classification']} policy={pressure['bash_policy']}. "
-            "Open an ACT with open_probe, then call protected_action_preflight before running this command."
+            "Open an ACT with open_probe before running this command; it must still be fresh."
         )
     elif pressure["act_required"]:
         prefix = "Bash action is ACT-bound before execution." if pressure["open_act"] else "Bash action should be bound to an open ACT before execution."

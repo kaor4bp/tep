@@ -118,9 +118,12 @@ Default enforcement is `balanced`:
 
 Before Bash or file edits, check the current briefing or call
 `action_pressure`. If the action is blocked or ACT-required, use
-`open_probe -> protected_action_preflight -> execute -> capture_probe_result ->
-close_probe`. Hooks cannot open ACT for you because `agent_private_key` exists
-only in the agent's memory.
+`open_probe -> execute -> capture_probe_result -> close_probe`. The default
+hook gate only checks that a matching open ACT exists in the ledger and has not
+expired under `settings.enforcement.act_timeout_seconds` (default 300 seconds).
+Use `protected_action_preflight` only when a strict/audited flow explicitly
+needs to bind a concrete action hash before execution. Hooks cannot open ACT for
+you because `agent_private_key` exists only in the agent's memory.
 
 Strict mode requires all base task context kinds unless overridden in settings:
 `task_briefing`, `coding_guidelines`, `domain_theory`, and
@@ -279,11 +282,13 @@ Use ACT records when an action may change protected state or when a hypothesis
 needs an evidence-producing probe:
 
 1. `open_probe` with the claim, intent, allowed action kind, and expected evidence.
-2. `protected_action_preflight` before the protected command or mutation.
-3. Execute the action only if preflight allows it.
-4. Capture the result as source evidence.
-5. `capture_probe_result`.
-6. `close_probe`.
+2. Execute the action while the ACT is still fresh.
+3. Capture the result as source evidence.
+4. `capture_probe_result`.
+5. `close_probe`.
+
+`protected_action_preflight` remains available for stricter audits, but it is
+not the default requirement for ordinary Bash hook admission.
 
 ACT is for the next bounded action, not for laundering old observations into
 permission. Open ACT against a narrow action intent or probe hypothesis such as

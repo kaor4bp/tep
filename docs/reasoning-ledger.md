@@ -39,8 +39,7 @@ the CLM graph and current context.
 ```text
 none
   -> open_probe / act
-  -> protected_action_preflight, when action is protected
-  -> RUN, when command/tool execution happens
+  -> RUN, when command/tool execution happens while ACT is fresh
   -> capture_probe_result
   -> close_probe
   -> none
@@ -60,7 +59,7 @@ Closure outcomes:
 Rules:
 
 - Minimal v1 keeps one open ACT per agent ledger.
-- Protected mutation requires an open ACT.
+- Protected mutation requires a fresh open ACT.
 - Final answer and task completion require no open ACT.
 - Another ACT cannot open from the same branch without new material state.
 - Captured command/test output cannot support commitment until integrated into
@@ -81,7 +80,6 @@ Protected work follows this sequence:
 
 ```text
 open_probe
-  -> protected_action_preflight
   -> execute action
   -> record_run
   -> capture_probe_result
@@ -89,10 +87,13 @@ open_probe
   -> close_probe
 ```
 
-`protected_action_preflight` binds the action to the ACT by action kind,
-command/action hash, cwd/scope, and expiry. `RUN-*` stores the observed
-execution result. `SRC-*` cites the relevant RUN output or artifact. `close_probe`
-must reference the evidence or an explicit no-update/cancel/supersede reason.
+Default hook admission checks only that the ledger has a matching open ACT and
+that it has not expired under `settings.enforcement.act_timeout_seconds`.
+`protected_action_preflight` is optional stricter/audited binding by action
+kind, command/action hash, cwd/scope, and expiry. `RUN-*` stores the observed
+execution result. `SRC-*` cites the relevant RUN output or artifact.
+`close_probe` must reference the evidence or an explicit no-update/cancel/
+supersede reason.
 
 ## Ledger Pressure
 

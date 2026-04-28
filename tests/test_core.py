@@ -80,6 +80,7 @@ class CoreTests(unittest.TestCase):
             defaults = runtime.read_settings(workspace["id"])
             self.assertTrue(defaults.ok, defaults.error)
             self.assertEqual(defaults.data["settings"]["enforcement"]["mode"], "balanced")
+            self.assertEqual(defaults.data["settings"]["enforcement"]["act_timeout_seconds"], 300)
 
             updated = runtime.update_settings(
                 {"enforcement": {"mode": "strict", "bash_policy": "act_for_all"}},
@@ -97,6 +98,9 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(pressure.ok, pressure.error)
             self.assertTrue(pressure.data["action_pressure"]["blocked"])
             self.assertEqual(pressure.data["action_pressure"]["classification"], "read_only_context")
+            pressure_moves = {move["operation_kind"] for move in pressure.data["action_pressure"]["valid_moves"]}
+            self.assertIn("open_probe", pressure_moves)
+            self.assertNotIn("protected_action_preflight", pressure_moves)
 
             bad = runtime.update_settings({"enforcement": {"mode": "chaos"}}, workspace_ref=workspace["id"])
             self.assertFalse(bad.ok)
@@ -2929,7 +2933,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.24")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.25")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2988,7 +2992,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.24")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.25")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,7 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "edit_policy": "act_required",
         "final_policy": "preflight_required",
         "unknown_action_policy": "block_until_act",
-        "act_timeout_seconds": 3600,
+        "act_timeout_seconds": 300,
         "context_requirements": {},
     },
 }
@@ -181,7 +181,7 @@ def _act_required(enforcement: dict[str, Any], action_kind: str, classification:
 
 def _pressure_reason(enforcement: dict[str, Any], classification: str, required: bool, blocked: bool) -> str:
     if blocked:
-        return "settings require an open ACT and protected_action_preflight before this action"
+        return "settings require a fresh open ACT before this action"
     if required:
         return "settings require this action to be bound to an open ACT"
     if enforcement["mode"] == "off":
@@ -193,7 +193,6 @@ def _pressure_moves(required: bool, blocked: bool) -> list[dict[str, Any]]:
     if required or blocked:
         return [
             move("probe_step", "open_probe", "Open an ACT for the action intent.", writes=True),
-            move("probe_step", "protected_action_preflight", "Bind this action to the open ACT.", writes=True),
             move("brief", "brief_current_context", "Refresh current ledger and settings context."),
         ]
     return [
