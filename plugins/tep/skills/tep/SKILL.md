@@ -295,16 +295,19 @@ permission. Open ACT against a narrow action intent or probe hypothesis such as
 “run pytest to inspect current auth behavior” or “verify whether fact X is
 stale in this checkout”. Do not open ACT against broad historical summaries,
 mechanical command observations, or claims that only say a previous run had some
-result. Such observations should remain `RUN-*`/`SRC-*` evidence or become
-separate system-behavior CLM facts before they guide a new probe.
+result. A narrow retry claim is valid when it states that the previous attempt
+failed/did not finish and names the bounded check to try again. Otherwise such
+observations should remain `RUN-*`/`SRC-*` evidence or become separate
+system-behavior CLM facts before they guide a new probe.
 
 ACTs expire according to `settings.enforcement.act_timeout_seconds`. If an ACT
 expires, close it or open a fresh ACT with a current intent before protected
 work.
 
-Final answers should call `final_answer_preflight` with the selected support
-refs. Task completion should call `task_done_preflight`. Do not present blocked
-support as final truth.
+Final answers should call `final_answer_preflight` with selected `CLM-*` support
+refs. `SRC-*`/`RUN-*` evidence must first be converted into a claim. Task
+completion should call `task_done_preflight`. Do not present blocked support as
+final truth.
 
 ## Let TEP Reduce Thinking Load
 

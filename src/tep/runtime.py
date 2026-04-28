@@ -1388,7 +1388,12 @@ class Runtime:
         def op() -> RuntimeResponse:
             workspace = self.store.read_workspace(workspace_ref)
             memberships = self.store.project_memberships(workspace_ref)
-            agent = self.store.read_agent(workspace_ref, agent_ref) if agent_ref else None
+            workspace_agents = self.store.agents(workspace_ref)
+            resolved_agent_ref = agent_ref
+            if resolved_agent_ref is None:
+                if len(workspace_agents) == 1:
+                    resolved_agent_ref = workspace_agents[0]["id"]
+            agent = self.store.read_agent(workspace_ref, resolved_agent_ref) if resolved_agent_ref else None
             task_path = agent["working_context"]["active_task_path"] if agent else []
             active_task = self.store.read_task(workspace_ref, task_path[-1]) if task_path else None
             task_context = self._task_context_state(workspace_ref, active_task["id"]) if active_task else None
@@ -1422,14 +1427,16 @@ class Runtime:
                     },
                     "compiled_context": task_context,
                     "agent": {
-                        "ref": agent_ref,
-                        "selected_ledger_head": self._ledger_pressure(workspace_ref, agent_ref)["current_head"] if agent_ref else None,
-                        "open_act": self._ledger_pressure(workspace_ref, agent_ref)["open_act"] if agent_ref else None,
+                        "ref": resolved_agent_ref,
+                        "inferred_from_workspace": agent_ref is None and resolved_agent_ref is not None,
+                        "known_agent_refs": [known_agent["id"] for known_agent in workspace_agents],
+                        "selected_ledger_head": self._ledger_pressure(workspace_ref, resolved_agent_ref)["current_head"] if resolved_agent_ref else None,
+                        "open_act": self._ledger_pressure(workspace_ref, resolved_agent_ref)["open_act"] if resolved_agent_ref else None,
                         "selected_claim_refs": selected_claim_refs,
                     },
                     "facts": facts,
                 },
-                ledger_pressure=self._ledger_pressure(workspace_ref, agent_ref),
+                ledger_pressure=self._ledger_pressure(workspace_ref, resolved_agent_ref),
                 valid_moves=self._brief_moves(active_task is None),
             )
 
@@ -1470,13 +1477,45 @@ class Runtime:
                         move("mutate_record", "compile_context_pack", "Retry with task_ref set to the target TASK-*.", writes=True),
                     ],
                 )
+            if message.startswith("missing_task_context:"):
+                missing = [item for item in message.split(":", 1)[1].split(",") if item]
+                return error_response(
+                    "missing_task_context",
+                    "required task context is missing or stale: " + ",".join(missing),
+                    details={"missing_required": missing},
+                    repair_options=[
+                        move("brief", "brief_current_context", "Inspect active task and stale/missing CTX-* packs."),
+                        move("lookup", "lookup_facts", "Collect CLM-* support for the missing context pack."),
+                        move("mutate_record", "compile_context_pack", "Recompile the missing or stale task context pack.", writes=True),
+                    ],
+                )
+            if message == "act_target_too_broad":
+                return error_response(
+                    "act_target_too_broad",
+                    "ACT target claim is too broad; create a narrow probe-specific CLM-* for the exact command/check you want to run",
+                    repair_options=[
+                        move("mutate_record", "create_claim", "Create a narrow CLM-* such as 'verify collect-only for test X'.", writes=True),
+                        move("append_ledger", "append_ledger", "Snapshot the narrow CLM-* before opening ACT.", writes=True),
+                        move("probe_step", "open_probe", "Open ACT against the narrow probe claim.", writes=True),
+                    ],
+                )
+            if message == "needs_claim_snapshot":
+                return error_response(
+                    "needs_claim_snapshot",
+                    "ACT target must already be snapshotted in the current reasoning ledger",
+                    repair_options=[
+                        move("append_ledger", "append_ledger", "Snapshot this CLM-* into the current agent ledger.", writes=True),
+                        move("probe_step", "open_probe", "Retry open_probe after the snapshot exists.", writes=True),
+                    ],
+                )
             return error_response("validation_failed", message, repair_options=[move("brief", "brief_current_context", "Refresh protocol context.")])
         except TEPError as exc:
             return error_response("protocol_error", str(exc), repair_options=[move("validate", "validate_ledger", "Validate current protocol state.")])
 
     def _validate_act_target_claim(self, workspace_ref: str, claim_ref: str) -> None:
         claim = self.store.read_claim(workspace_ref, claim_ref)
-        if self._claim_analysis_pressure(claim):
+        retry_probe = self._is_retry_probe_claim(claim)
+        if self._claim_analysis_pressure(claim) and not retry_probe:
             raise ValidationError("act_target_too_broad")
         source_refs = claim.get("source_refs", [])
         if not source_refs:
@@ -1485,8 +1524,26 @@ class Runtime:
         source_classes = {source.get("classification", {}).get("source_class") for source in sources}
         source_kinds = {source.get("source_kind") for source in sources}
         observation_only = source_classes.issubset({"runtime_observation", "test_or_check"}) or source_kinds.issubset({"command_output", "command_summary"})
-        if observation_only and not claim.get("relation") and not claim.get("support_refs"):
+        if observation_only and not retry_probe and not claim.get("relation") and not claim.get("support_refs"):
             raise ValidationError("act_target_observation_only")
+
+    @staticmethod
+    def _is_retry_probe_claim(claim: dict[str, Any]) -> bool:
+        statement = str(claim.get("statement") or "").casefold()
+        retry_markers = ("retry", "try again", "rerun", "run again", "попробовать ещё", "попробовать еще", "ещё раз", "еще раз", "повтор")
+        prior_failure_markers = (
+            "previous",
+            "last time",
+            "failed",
+            "did not finish",
+            "not enough time",
+            "не получилось",
+            "не успел",
+            "не успела",
+            "прошлый раз",
+            "предыдущ",
+        )
+        return any(marker in statement for marker in retry_markers) and any(marker in statement for marker in prior_failure_markers)
 
     def _require_open_act_fresh(self, workspace_ref: str, open_act: dict[str, Any]) -> None:
         timeout = int(self.store.read_settings(workspace_ref)["enforcement"].get("act_timeout_seconds", 300))
@@ -1631,6 +1688,26 @@ class Runtime:
                 )
 
         for claim_ref in support_refs:
+            if not isinstance(claim_ref, str) or not claim_ref.startswith("CLM-"):
+                blockers.append(
+                    {
+                        "code": "unsupported_support_ref",
+                        "refs": [claim_ref],
+                        "why": "final answer support_refs must be CLM-* refs; capture SRC/RUN evidence into a CLM-* first",
+                    }
+                )
+                support.append(
+                    {
+                        "claim_ref": claim_ref,
+                        "trust_posture": None,
+                        "scope": None,
+                        "bridge_ref": None,
+                        "bridge_context": None,
+                        "ledgered": False,
+                        "blockers": ["support_ref_not_claim"],
+                    }
+                )
+                continue
             claim = self.store.read_claim(workspace_ref, claim_ref)
             posture = self.posture.trust_posture(workspace_ref, claim)
             scope = self.posture.scope_metadata(workspace_ref, claim, task)
@@ -1739,10 +1816,12 @@ class Runtime:
             moves.append(move("probe_step", "close_probe", "Close the open ACT before finalizing.", writes=True))
         if "ledger_invalid" in codes:
             moves.append(move("validate", "validate_ledger", "Inspect ledger replay errors."))
-        if "missing_support_refs" in codes or "support_blocked" in codes:
+        if "missing_support_refs" in codes or "support_blocked" in codes or "unsupported_support_ref" in codes:
             moves.append(move("lookup", "lookup_facts", "Find answer-usable support facts."))
             moves.append(move("append_ledger", "append_ledger", "Snapshot required support facts into current ledger.", writes=True))
             moves.append(move("mutate_record", "link_claims", "Create required bridge/support relation.", writes=True))
+        if "unsupported_support_ref" in codes:
+            moves.append(move("mutate_record", "create_claim", "Create a CLM-* from the SRC/RUN evidence before final preflight.", writes=True))
         if "task_has_blockers" in codes:
             moves.append(move("brief", "brief_current_context", "Inspect task blockers."))
         if "agent_not_attached_to_task" in codes:

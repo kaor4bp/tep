@@ -71,6 +71,20 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn(identity.private_key, raw)
             self.assertEqual(agent["public_key"], public_key_from_private(identity.private_key))
 
+    def test_brief_current_context_infers_single_workspace_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("solo-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+
+            brief = runtime.brief_current_context(workspace["id"])
+
+            self.assertTrue(brief.ok, brief.error)
+            self.assertEqual(brief.data["agent"]["ref"], agent["id"])
+            self.assertTrue(brief.data["agent"]["inferred_from_workspace"])
+            self.assertEqual(brief.ledger_pressure["current_agent"], agent["id"])
+
     def test_settings_merge_and_action_pressure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -662,8 +676,8 @@ class CoreTests(unittest.TestCase):
                 difficulty_bits=8,
             )
             self.assertFalse(blocked.ok)
-            self.assertEqual(blocked.error["code"], "validation_failed")
-            self.assertIn("needs_claim_snapshot", blocked.error["message"])
+            self.assertEqual(blocked.error["code"], "needs_claim_snapshot")
+            self.assertIn("append_ledger", {move["operation_kind"] for move in blocked.repair_options})
 
             runtime.append_ledger(
                 workspace_ref=workspace["id"],
@@ -763,7 +777,8 @@ class CoreTests(unittest.TestCase):
                 difficulty_bits=8,
             )
             self.assertFalse(broad_act.ok)
-            self.assertIn("act_target_too_broad", broad_act.error["message"])
+            self.assertEqual(broad_act.error["code"], "act_target_too_broad")
+            self.assertIn("create_claim", {move["operation_kind"] for move in broad_act.repair_options})
 
             run = runtime.capture_bash_command(workspace["id"], command="pytest -q", cwd=tmp, exit_code=1, stdout="1 failed\n").data["run"]
             source = runtime.capture_run_output_source(workspace["id"], run_ref=run["id"], stream="stdout").data["source"]
@@ -789,6 +804,42 @@ class CoreTests(unittest.TestCase):
             )
             self.assertFalse(observation_act.ok)
             self.assertIn("act_target_observation_only", observation_act.error["message"])
+
+    def test_open_probe_allows_retry_probe_claim_from_runtime_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("retry-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            run = runtime.capture_bash_command(workspace["id"], command="pytest -q", cwd=tmp, exit_code=1, stdout="interrupted\n").data["run"]
+            source = runtime.capture_run_output_source(workspace["id"], run_ref=run["id"], stream="stdout").data["source"]
+            claim = runtime.create_claim(
+                workspace["id"],
+                "Previous pytest attempt did not finish; retry the focused collect-only check.",
+                source_refs=[source["id"]],
+            ).data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot retry probe intent.",
+                difficulty_bits=8,
+            )
+
+            opened = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Retry collect-only check.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+
+            self.assertTrue(opened.ok, opened.error)
+            self.assertEqual(opened.data["ledger_row"]["kind"], "act")
 
     def test_open_probe_allows_hostname_probe_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -907,7 +958,9 @@ class CoreTests(unittest.TestCase):
             )
 
             self.assertFalse(blocked.ok)
-            self.assertIn("missing_task_context", blocked.error["message"])
+            self.assertEqual(blocked.error["code"], "missing_task_context")
+            self.assertIn("task_briefing", blocked.error["details"]["missing_required"])
+            self.assertIn("compile_context_pack", {move["operation_kind"] for move in blocked.repair_options})
 
             for kind in ("task_briefing", "coding_guidelines", "domain_theory", "project_conventions"):
                 compiled = runtime.compile_context_pack(
@@ -1044,6 +1097,16 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(unledgered.ok)
             self.assertFalse(unledgered.data["final_answer_preflight"]["allowed"])
             self.assertIn("support_blocked", {blocker["code"] for blocker in unledgered.data["final_answer_preflight"]["blockers"]})
+
+            source_support = runtime.final_answer_preflight(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                support_refs=[source["id"]],
+            )
+            self.assertTrue(source_support.ok, source_support.error)
+            self.assertFalse(source_support.data["final_answer_preflight"]["allowed"])
+            self.assertIn("unsupported_support_ref", {blocker["code"] for blocker in source_support.data["final_answer_preflight"]["blockers"]})
+            self.assertIn("create_claim", {move["operation_kind"] for move in source_support.valid_moves})
 
             runtime.append_ledger(
                 workspace_ref=workspace["id"],
@@ -2933,7 +2996,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.25")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.26")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2992,7 +3055,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.25")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.26")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

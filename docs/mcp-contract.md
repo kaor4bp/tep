@@ -579,7 +579,8 @@ scope, expected evidence, and the same explicit in-memory signing parameter.
 The target must be a narrow current action intent or probe hypothesis, not a
 broad historical run summary or pure runtime/command observation. Broad targets
 return `act_target_too_broad`; pure observation targets return
-`act_target_observation_only`.
+`act_target_observation_only`. A narrow retry claim may cite the previous
+failed/unfinished attempt if it names the bounded next check to try again.
 
 `protected_action_preflight`
 : Optionally validate that a protected action matches the current open ACT in a

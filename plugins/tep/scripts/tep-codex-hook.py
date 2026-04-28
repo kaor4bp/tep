@@ -508,7 +508,7 @@ def exit_code(payload: dict) -> int | None:
 
 def response_text(payload: dict, stream: str) -> str:
     keys = {
-        "stdout": ("stdout", "output"),
+        "stdout": ("stdout", "output", "text", "content"),
         "stderr": ("stderr", "error_output"),
     }[stream]
     for container_name in ("tool_response", "result", "response"):
@@ -519,6 +519,15 @@ def response_text(payload: dict, stream: str) -> str:
             value = container.get(key)
             if isinstance(value, str):
                 return value
+            if isinstance(value, list):
+                parts = []
+                for item in value:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                if parts:
+                    return "\n".join(parts)
     for key in keys:
         value = payload.get(key)
         if isinstance(value, str):
