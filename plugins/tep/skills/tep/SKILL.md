@@ -222,9 +222,15 @@ support as final truth.
 ## Let TEP Reduce Thinking Load
 
 Use TEP responses as steering signals. On successful responses and errors, look
-at `ledger_pressure`, `repair_options`, `valid_next_operations`, blockers, and
-trust posture. These are candidate valid moves; choose the one that best matches
-the task instead of inventing a bypass.
+at `ledger_pressure`, `claim_pressure`, `source_pressure`, `dedup_pressure`,
+`repair_options`, `valid_moves`, blockers, and trust posture. These are
+candidate valid moves; choose the one that best matches the task instead of
+inventing a bypass.
+
+When `claim_pressure` asks analysis questions, answer them by creating narrower
+`CLM-*` records and linking them to the broader claim. Prefer one point fact per
+claim. Do not hide observations, inference, applicability, and uncertainty in a
+single heavy statement.
 
 Good default loop:
 

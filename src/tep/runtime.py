@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from .crypto import AgentIdentity, assert_private_key_matches, generate_agent_identity
@@ -507,15 +508,20 @@ class Runtime:
                         ],
                     }
                 )
+            claim_pressure = self._claim_analysis_pressure(claim)
             valid_moves = [
                 move("append_ledger", "append_ledger", "Snapshot claim into current agent ledger.", writes=True),
                 move("lookup", "lookup_facts", "Look for duplicates, supports, or contradictions."),
             ]
+            if claim_pressure:
+                valid_moves.insert(0, move("mutate_record", "create_claim", "Split broad claim into narrower CLM-* records.", writes=True))
+                valid_moves.insert(1, move("mutate_record", "link_claims", "Relate split facts to the original claim.", writes=True))
             if invalidated_context_refs:
                 valid_moves.append(move("mutate_record", "compile_context_pack", "Recompile stale CTX-* context packs affected by this claim.", writes=True))
             return ok_response(
                 {"claim": claim, "invalidated_context_refs": invalidated_context_refs},
                 source_pressure=source_pressure,
+                claim_pressure=claim_pressure,
                 valid_moves=valid_moves,
             )
 
@@ -889,10 +895,12 @@ class Runtime:
                 "links": self.posture.record_links(record),
             }
             source_pressure: list[dict[str, Any]] = []
+            claim_pressure: list[dict[str, Any]] = []
             valid_moves = [move("brief", "brief_current_context", "Return to briefing.")]
             if record_ref.startswith("CLM-"):
                 detail["trust_posture"] = self.posture.trust_posture(workspace_ref, record)
                 detail["scope"] = self.posture.scope_metadata(workspace_ref, record, None)
+                claim_pressure = self._claim_analysis_pressure(record)
                 if not record.get("source_refs"):
                     source_pressure.append(
                         {
@@ -907,6 +915,8 @@ class Runtime:
                     move("lookup", "lookup_facts", "Find related facts."),
                     move("mutate_record", "link_claims", "Create explicit relation if needed.", writes=True),
                 ]
+                if claim_pressure:
+                    valid_moves.insert(0, move("mutate_record", "create_claim", "Split broad claim into narrower CLM-* records.", writes=True))
             elif record_ref.startswith("SRC-"):
                 detail["source_trust_posture"] = self.posture.source_trust_posture(record)
                 source_events = self.store.validate_source_events(workspace_ref)
@@ -955,7 +965,7 @@ class Runtime:
                     move("mutate_record", "attach_agent_to_task", "Attach current agent to this task.", writes=True),
                     move("lookup", "lookup_facts", "Find facts for this task."),
                 ]
-            return ok_response({"detail": detail}, source_pressure=source_pressure, valid_moves=valid_moves)
+            return ok_response({"detail": detail}, source_pressure=source_pressure, claim_pressure=claim_pressure, valid_moves=valid_moves)
 
         return self._guard(op)
 
@@ -1048,6 +1058,48 @@ class Runtime:
             return error_response("validation_failed", message, repair_options=[move("brief", "brief_current_context", "Refresh protocol context.")])
         except TEPError as exc:
             return error_response("protocol_error", str(exc), repair_options=[move("validate", "validate_ledger", "Validate current protocol state.")])
+
+    def _claim_analysis_pressure(self, claim: dict[str, Any]) -> list[dict[str, Any]]:
+        statement = str(claim.get("statement") or "")
+        if not statement.strip() or claim.get("relation"):
+            return []
+        normalized = " ".join(statement.split())
+        words = normalized.split()
+        sentence_count = sum(1 for part in re.split(r"[.!?]+", normalized) if part.strip())
+        separators = normalized.count(";") + normalized.count(":") + normalized.count(",")
+        connectors = sum(
+            1
+            for pattern in [
+                r"\band\b",
+                r"\bor\b",
+                r"\bbecause\b",
+                r"\btherefore\b",
+                r"\bso that\b",
+                r"\bwhich\b",
+                r"\bthat\b",
+            ]
+            if re.search(pattern, normalized, flags=re.IGNORECASE)
+        )
+        heavy = len(words) >= 24 or sentence_count > 1 or separators >= 3 or connectors >= 2
+        if not heavy:
+            return []
+        return [
+            {
+                "level": "medium",
+                "claim_refs": [claim["id"]],
+                "why": "claim appears broad or compound; it may hide several atomic facts or mix observation with inference",
+                "questions": [
+                    "What exactly did the agent learn?",
+                    "Can this CLM-* be split into separate point facts?",
+                    "Which parts are observed evidence, inference, applicability, or uncertainty?",
+                ],
+                "valid_moves": [
+                    move("mutate_record", "create_claim", "Create one CLM-* per separable point fact.", writes=True),
+                    move("mutate_record", "link_claims", "Link split facts with support/dependency/applicability/equivalence relations.", writes=True),
+                    move("lookup", "lookup_facts", "Check whether atomic parts already exist."),
+                ],
+            }
+        ]
 
     def _read_record(self, workspace_ref: str, record_ref: str) -> dict[str, Any]:
         if record_ref.startswith("CLM-"):

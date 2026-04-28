@@ -77,6 +77,7 @@ Every serious tool response includes:
   },
   "index_pressure": [],
   "source_pressure": [],
+  "claim_pressure": [],
   "dedup_pressure": [],
   "valid_moves": [
     {
@@ -106,6 +107,7 @@ Failed mutation response:
   "ledger_pressure": {},
   "index_pressure": [],
   "source_pressure": [],
+  "claim_pressure": [],
   "dedup_pressure": [],
   "valid_moves": [],
   "repair_options": [
@@ -466,6 +468,11 @@ audit event.
 duplicates fail with `duplicate_claim` and return the existing claim. Near
 duplicates return `dedup_pressure`; creation requires selecting an existing
 claim, linking claims, merging/splitting, or providing `distinction_reason`.
+Broad or compound claims return `claim_pressure` with analysis questions such
+as what exactly the agent learned, whether the claim should be split into point
+facts, and which parts are observation, inference, applicability, or
+uncertainty. This pressure does not store a claim status; it is runtime guidance
+that pushes the agent toward narrower `CLM-*` records and explicit relations.
 If the new claim is under-supported, runtime should return inference pressure:
 the agent must either provide accepted source support, create/select an
 inference relation such as `deduced_from`, `induced_from`, `abduced_from`,

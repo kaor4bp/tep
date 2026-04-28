@@ -548,6 +548,32 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(duplicate.dedup_pressure)
             self.assertIn("select_existing_claim", {move["operation_kind"] for move in duplicate.repair_options})
 
+    def test_broad_claim_returns_decomposition_pressure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+
+            response = runtime.create_claim(
+                workspace["id"],
+                (
+                    "The pytest run shows that the API returns 500 instead of 200, "
+                    "the login flow has a bad token error, and the agent should inspect "
+                    "the auth middleware before changing the response handler."
+                ),
+            )
+
+            self.assertTrue(response.ok, response.error)
+            self.assertTrue(response.claim_pressure)
+            pressure = response.claim_pressure[0]
+            self.assertEqual(pressure["claim_refs"], [response.data["claim"]["id"]])
+            self.assertIn("What exactly did the agent learn?", pressure["questions"])
+            self.assertIn("create_claim", {move["operation_kind"] for move in pressure["valid_moves"]})
+            self.assertIn("link_claims", {move["operation_kind"] for move in response.valid_moves})
+
+            detail = runtime.record_detail(workspace["id"], response.data["claim"]["id"])
+            self.assertTrue(detail.claim_pressure)
+            self.assertIn("create_claim", {move["operation_kind"] for move in detail.valid_moves})
+
     def test_runtime_append_ledger_returns_pressure_and_moves(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2321,7 +2347,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.12")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.13")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2380,7 +2406,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.12")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.13")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
