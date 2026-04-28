@@ -542,6 +542,26 @@ def pytest_summary(output: str) -> tuple[str | None, list[str]]:
     return summary, failed[:5]
 
 
+def pytest_failure_claims(command: str, output: str, limit: int = 10) -> list[str]:
+    compact = compact_command(command)
+    claims: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        match = re.match(r"(?P<status>FAILED|ERROR)\s+(?P<target>\S+)(?:\s+-\s+(?P<reason>.*))?$", stripped)
+        if not match:
+            continue
+        target = match.group("target")[:180]
+        reason = " ".join((match.group("reason") or "").split())[:220]
+        status = "failed" if match.group("status") == "FAILED" else "errored"
+        statement = f"Pytest test `{target}` {status} during `{compact}`."
+        if reason:
+            statement = statement[:-1] + f": {reason}."
+        claims.append(statement)
+        if len(claims) >= limit:
+            break
+    return claims
+
+
 def command_observation_statement(command: str, code: int, stdout: str = "", stderr: str = "") -> str:
     compact = compact_command(command)
     combined = "\n".join(part for part in [stdout, stderr] if part)
@@ -690,6 +710,12 @@ def handle_post_bash(payload: dict) -> int:
             if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
                 payload_args["project_refs"] = [project_ref]
             call_tep(pointer, "create_claim", payload_args)
+            combined = "\n".join(part for part in [stdout, stderr] if part)
+            for detail_statement in pytest_failure_claims(command, combined):
+                detail_args = {"workspace_ref": wsp, "statement": detail_statement, "source_refs": [source["id"]]}
+                if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
+                    detail_args["project_refs"] = [project_ref]
+                call_tep(pointer, "create_claim", detail_args)
     return 0
 
 

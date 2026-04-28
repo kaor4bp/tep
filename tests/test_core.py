@@ -1698,7 +1698,7 @@ class CoreTests(unittest.TestCase):
             claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
             self.assertEqual(len(claims), 1)
 
-    def test_codex_hook_creates_semantic_pytest_claim(self) -> None:
+    def test_codex_hook_creates_semantic_pytest_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
             project_root = Path(tmp) / "project"
@@ -1737,12 +1737,21 @@ class CoreTests(unittest.TestCase):
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
-            self.assertEqual(len(claims), 1)
-            claim = json.loads(claims[0].read_text(encoding="utf-8"))
-            self.assertIn("2 failed, 3 passed, 1 skipped", claim["statement"])
-            self.assertIn("tests/test_api.py::test_returns_200", claim["statement"])
-            self.assertNotEqual(claim["statement"], "Command `pytest tests -q` exited with code 1.")
+            claims = [json.loads(path.read_text(encoding="utf-8")) for path in sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))]
+            self.assertEqual(len(claims), 3)
+            statements = {claim["statement"] for claim in claims}
+            summary_statement = next(statement for statement in statements if statement.startswith("Pytest command"))
+            self.assertIn("2 failed, 3 passed, 1 skipped", summary_statement)
+            self.assertIn("tests/test_api.py::test_returns_200", summary_statement)
+            self.assertNotEqual(summary_statement, "Command `pytest tests -q` exited with code 1.")
+            self.assertIn(
+                "Pytest test `tests/test_api.py::test_returns_200` failed during `pytest tests -q`: AssertionError: 500 != 200.",
+                statements,
+            )
+            self.assertIn(
+                "Pytest test `tests/test_auth.py::test_login` failed during `pytest tests -q`: RuntimeError: bad token.",
+                statements,
+            )
 
     def test_codex_hook_blocks_bash_when_strict_settings_require_act(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2312,7 +2321,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.11")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.12")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2371,7 +2380,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.11")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.12")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
