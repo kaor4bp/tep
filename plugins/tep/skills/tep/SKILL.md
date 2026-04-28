@@ -172,6 +172,9 @@ important instruction, capture it before deriving claims:
 - Use `capture_source_fragments` when an ingested document is too large to
   inspect reliably as one source. Fragments are navigation units, not proof by
   themselves.
+- Use `confirm_source_for_scope` only after capturing explicit user
+  confirmation that a source has a given class/scope. This records an accepted
+  source event; it does not replace exact quote extraction for document facts.
 - Use `extract_claim_candidates` when deriving facts from a document: propose
   candidate `{quote, statement}` pairs so TEP can verify the quote exists and
   create excerpt evidence.
@@ -196,6 +199,9 @@ path: `ingest_file -> extract_claim_candidates -> create_claim_from_evidence`.
 For long documents, use `capture_source_fragments` first, then run
 `extract_claim_candidates` on selected fragments. If no useful facts should be
 extracted, record that as a bounded decision instead of inventing claims.
+If the uploaded document's authority is ambiguous, ask the user and capture the
+answer with `capture_input`, then call `confirm_source_for_scope` with that
+`INP-*` as `confirmation_ref`.
 
 For test and command evidence, do not stop at “pytest ran” or “command exited”.
 Use `extract_run_claim_candidates` for exact stdout/stderr quotes that reveal a

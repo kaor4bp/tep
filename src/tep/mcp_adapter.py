@@ -142,6 +142,10 @@ class MCPAdapter:
                 MCPToolSpec("extract_claim_candidates", "source", True, "Validate quote-backed claim candidates and capture excerpt SRC-* records.", ("workspace_ref", "source_ref", "candidates")),
                 self._extract_claim_candidates,
             ),
+            "confirm_source_for_scope": (
+                MCPToolSpec("confirm_source_for_scope", "source", True, "Confirm a source's class and authority scope using user-provided confirmation evidence.", ("workspace_ref", "source_ref", "confirmation_ref", "source_class", "authority_scope", "reason"), ("actor_ref",)),
+                self._confirm_source_for_scope,
+            ),
             "capture_input": (
                 MCPToolSpec("capture_input", "input", True, "Capture an INP-* event and source.", ("workspace_ref", "text", "input_class")),
                 self._capture_input,
@@ -403,6 +407,11 @@ class MCPAdapter:
         payload = dict(args)
         workspace_ref = payload.pop("workspace_ref")
         return self.runtime.extract_claim_candidates(workspace_ref, **payload)
+
+    def _confirm_source_for_scope(self, args: dict[str, Any]) -> RuntimeResponse:
+        payload = dict(args)
+        workspace_ref = payload.pop("workspace_ref")
+        return self.runtime.confirm_source_for_scope(workspace_ref, **payload)
 
     def _capture_input(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)

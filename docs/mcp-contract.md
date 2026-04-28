@@ -464,6 +464,15 @@ are navigation/review units only: claims still cannot cite them directly and
 must use exact excerpt evidence produced by `extract_claim_candidates` or
 `capture_source_excerpt`.
 
+`confirm_source_for_scope`
+: Confirm a source's class and authority scope using explicit user-provided
+confirmation evidence. Input includes `source_ref`, `confirmation_ref`,
+`source_class`, `authority_scope`, and `reason`; `confirmation_ref` must point
+to user-captured `INP-*` or user-classified `SRC-*`. Runtime updates the source
+classification through the typed path, appends an accepted source event, and
+keeps source-event replay valid. This is narrower than a generic
+`accept_source`: it records who confirmed what scope and why.
+
 `extract_claim_candidates`
 : Validate agent-proposed document fact candidates. Input is a source plus
 candidate objects containing at least `quote` and `statement`. Runtime verifies

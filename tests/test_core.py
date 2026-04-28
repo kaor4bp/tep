@@ -1738,6 +1738,66 @@ class CoreTests(unittest.TestCase):
             )
             self.assertTrue(claim.ok, claim.error)
 
+    def test_confirm_source_for_scope_uses_user_confirmation_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            path = Path(tmp) / "guide.md"
+            path.write_text("# Guide\nThe retry limit is 3 attempts.\n", encoding="utf-8")
+            source = runtime.ingest_file(workspace["id"], str(path)).data["source"]
+            confirmation = runtime.capture_input(
+                workspace["id"],
+                text="This uploaded guide is first-party project documentation for this task.",
+                input_class="user_confirmation",
+            ).data["input"]
+
+            confirmed = runtime.confirm_source_for_scope(
+                workspace["id"],
+                source_ref=source["id"],
+                confirmation_ref=confirmation["id"],
+                source_class="first_party_project",
+                authority_scope="project_documentation",
+                reason="User confirmed the uploaded guide's project authority.",
+            )
+
+            self.assertTrue(confirmed.ok, confirmed.error)
+            confirmed_source = confirmed.data["source"]
+            self.assertEqual(confirmed_source["critique_status"], "accepted")
+            self.assertEqual(confirmed_source["classification"]["source_class"], "first_party_project")
+            self.assertEqual(confirmed_source["classification"]["authority_scope"], "project_documentation")
+            self.assertEqual(confirmed.data["source_trust_posture"]["derived_label"], "high")
+            event = confirmed.data["source_event"]
+            self.assertEqual(event["event_kind"], "accepted")
+            self.assertEqual(event["confirmation_ref"], confirmation["id"])
+            validation = store.validate_source_events(workspace["id"])
+            self.assertTrue(validation.ok, validation.errors)
+            self.assertEqual(validation.accepted_sources[source["id"]], event["event_id"])
+
+    def test_confirm_source_for_scope_requires_user_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            source = runtime.create_source(workspace["id"], source_kind="agent_observation", quote="Observation.").data["source"]
+            agent_input = runtime.capture_input(
+                workspace["id"],
+                text="Agent thinks this is official.",
+                input_class="user_confirmation",
+                actor_ref="agent",
+            ).data["input"]
+
+            response = runtime.confirm_source_for_scope(
+                workspace["id"],
+                source_ref=source["id"],
+                confirmation_ref=agent_input["id"],
+                source_class="official_doc",
+                authority_scope="project_documentation",
+                reason="Agent attempted to confirm source authority.",
+            )
+
+            self.assertFalse(response.ok)
+            self.assertIn("confirm_source_requires_user_confirmation", response.error["message"])
+
     def test_extract_claim_candidates_and_create_claim_from_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Runtime(TEPHome(tmp))
@@ -2496,6 +2556,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("capture_source_excerpt", tool_names)
             self.assertIn("capture_source_fragments", tool_names)
             self.assertIn("extract_claim_candidates", tool_names)
+            self.assertIn("confirm_source_for_scope", tool_names)
             self.assertIn("create_claim_from_evidence", tool_names)
             self.assertIn("capture_input", tool_names)
             self.assertIn("capture_bash_command", tool_names)
@@ -2784,7 +2845,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.22")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.23")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2843,7 +2904,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.22")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.23")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -299,6 +299,55 @@ class Runtime:
 
         return self._guard(op)
 
+    def confirm_source_for_scope(
+        self,
+        workspace_ref: str,
+        *,
+        source_ref: str,
+        confirmation_ref: str,
+        source_class: str,
+        authority_scope: str,
+        reason: str,
+        actor_ref: str = "runtime",
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            if not source_class:
+                raise ValidationError("confirm_source_requires_source_class")
+            if not authority_scope:
+                raise ValidationError("confirm_source_requires_authority_scope")
+            if not reason:
+                raise ValidationError("confirm_source_requires_reason")
+            if not (confirmation_ref.startswith("INP-") or confirmation_ref.startswith("SRC-")):
+                raise ValidationError("confirm_source_requires_input_or_source_confirmation")
+            confirmation = self._read_record(workspace_ref, confirmation_ref)
+            if confirmation_ref.startswith("INP-") and confirmation.get("actor_ref") != "user":
+                raise ValidationError("confirm_source_requires_user_confirmation")
+            if confirmation_ref.startswith("SRC-") and confirmation.get("classification", {}).get("source_class") != "user":
+                raise ValidationError("confirm_source_requires_user_confirmation")
+            source, event = self.store.confirm_source_for_scope(
+                workspace_ref,
+                source_ref,
+                confirmation_ref=confirmation_ref,
+                source_class=source_class,
+                authority_scope=authority_scope,
+                reason=reason,
+                actor_ref=actor_ref,
+            )
+            return ok_response(
+                {
+                    "source": source,
+                    "source_event": event,
+                    "source_trust_posture": self.posture.source_trust_posture(source),
+                },
+                valid_moves=[
+                    move("mutate_record", "extract_claim_candidates", "Extract quote-backed claims if this is document evidence.", writes=True),
+                    move("mutate_record", "create_claim", "Create/select CLM-* facts from non-document sources.", writes=True),
+                    move("lookup", "lookup_facts", "Check for corroborating or conflicting facts."),
+                ],
+            )
+
+        return self._guard(op)
+
     def capture_source_fragments(
         self,
         workspace_ref: str,

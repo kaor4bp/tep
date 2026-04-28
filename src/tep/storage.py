@@ -710,6 +710,42 @@ class TEPHome:
             records.extend(read_json(path) for path in sorted(legacy_dir.glob("SRC-*.json")))
         return [source for source in self._dedupe_records(records) if self.source_visible_in_workspace(workspace_ref, source)]
 
+    def confirm_source_for_scope(
+        self,
+        workspace_ref: str,
+        source_ref: str,
+        *,
+        confirmation_ref: str,
+        source_class: str,
+        authority_scope: str,
+        reason: str,
+        actor_ref: str = "runtime",
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        source = self.read_source(workspace_ref, source_ref)
+        if not self.source_visible_in_workspace(workspace_ref, source):
+            raise ValidationError(f"source_not_visible:{source_ref}")
+        classification = dict(source.get("classification", {}))
+        classification["source_class"] = source_class
+        classification["authority_scope"] = authority_scope
+        source["classification"] = self._source_classification_defaults(classification)
+        source["critique_status"] = "accepted"
+        source["updated_at"] = utc_now()
+        self._write_json(self.source_path(workspace_ref, source_ref), source)
+        event = self._append_source_event(
+            workspace_ref,
+            source_ref=source_ref,
+            event_kind="accepted",
+            policy_basis=f"user_confirmed_scope:{source_class}:{authority_scope}",
+            actor_ref=actor_ref,
+            reason=reason,
+            extra={
+                "confirmation_ref": confirmation_ref,
+                "confirmed_source_class": source_class,
+                "confirmed_authority_scope": authority_scope,
+            },
+        )
+        return source, event
+
     def source_event_by_id(self, workspace_ref: str, event_id: str) -> dict[str, Any] | None:
         for event in self.source_events(workspace_ref):
             if event.get("event_id") == event_id:
@@ -721,6 +757,12 @@ class TEPHome:
         errors: list[str] = []
         event_hashes: dict[str, str] = {}
         accepted_sources: dict[str, str] = {}
+        latest_event_by_source: dict[str, str] = {}
+        for event in events:
+            source_ref = event.get("source_ref")
+            event_id = event.get("event_id")
+            if isinstance(source_ref, str) and isinstance(event_id, str):
+                latest_event_by_source[source_ref] = event_id
         seen: set[str] = set()
         previous_id: str | None = None
         previous_hash: str | None = None
@@ -754,10 +796,11 @@ class TEPHome:
                     source_hash = None
                     classification_hash = None
 
-            if source_hash is not None and event.get("source_hash") != source_hash:
-                errors.append(f"{event_id}: source_hash mismatch")
-            if classification_hash is not None and event.get("classification_hash") != classification_hash:
-                errors.append(f"{event_id}: classification_hash mismatch")
+            if latest_event_by_source.get(source_ref) == event_id:
+                if source_hash is not None and event.get("source_hash") != source_hash:
+                    errors.append(f"{event_id}: source_hash mismatch")
+                if classification_hash is not None and event.get("classification_hash") != classification_hash:
+                    errors.append(f"{event_id}: classification_hash mismatch")
 
             expected_log_hash = canonical_hash(
                 {
@@ -1293,6 +1336,7 @@ class TEPHome:
         policy_basis: str,
         actor_ref: str,
         reason: str,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         source = self.read_source(workspace_ref, source_ref)
         previous = self.source_events(workspace_ref)[-1:] or [None]
@@ -1324,6 +1368,8 @@ class TEPHome:
             "reason": reason,
             "created_at": utc_now(),
         }
+        if extra:
+            event_core.update(extra)
         event = dict(event_core)
         event["event_hash"] = canonical_hash(event_core)
         self.append_jsonl(self.source_events_path(workspace_ref), event)
