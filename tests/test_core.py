@@ -1644,6 +1644,29 @@ class CoreTests(unittest.TestCase):
             inputs = sorted((tep_home / "workspaces" / workspace["id"] / "records" / "inp").glob("INP-*.json"))
             self.assertEqual(len(inputs), 1)
 
+    def test_codex_hook_session_start_reminds_agent_to_record_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            completed = subprocess.run(
+                [sys.executable, str(script), "session-start"],
+                input=json.dumps({"cwd": str(project_root)}),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("record durable system facts as CLM-*", completed.stdout)
+
     def test_codex_hook_captures_post_bash_with_stdio_pointer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
@@ -2347,7 +2370,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.14")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.15")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2406,7 +2429,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.14")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.15")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

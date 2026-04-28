@@ -599,7 +599,10 @@ def handle_session_start(payload: dict) -> int:
     if pointer_path is None:
         emit_context("No local .tep pointer found. Run tep-init before relying on TEP hooks.", event="SessionStart")
         return 0
-    message = "TEP hooks visible. Start by generating/continuing in-memory agent identity, then call brief_current_context."
+    message = (
+        "TEP hooks visible. Start by generating/continuing in-memory agent identity, "
+        "then call brief_current_context. During the task, record durable system facts as CLM-* when observations change your understanding."
+    )
     wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
     if wsp is None:
         message += " No unique WSP-* resolved from .tep project membership; run tep-init or attach the project to one workspace."
@@ -748,7 +751,10 @@ def handle_post_bash(payload: dict) -> int:
 
 def handle_stop(payload: dict) -> int:
     if os.environ.get("TEP_AGENT_REF") and workspace_ref():
-        emit_context("Before final answer/task done, call final_answer_preflight or task_done_preflight with selected support refs.", event="Stop")
+        emit_context(
+            "Before final answer/task done, record any newly learned durable system facts as CLM-* with SRC support, then call final_answer_preflight or task_done_preflight with selected support refs.",
+            event="Stop",
+        )
     return 0
 
 
