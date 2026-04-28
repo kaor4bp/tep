@@ -40,6 +40,21 @@ class CoreTests(unittest.TestCase):
         )
         self.assertTrue(compiled.ok, compiled.error)
 
+    def _operation_kinds_from(self, value) -> set[str]:
+        kinds: set[str] = set()
+        if isinstance(value, dict):
+            operation_kind = value.get("operation_kind")
+            if isinstance(operation_kind, str):
+                kinds.add(operation_kind)
+            for child in value.values():
+                kinds.update(self._operation_kinds_from(child))
+        elif isinstance(value, list):
+            for child in value:
+                kinds.update(self._operation_kinds_from(child))
+        elif hasattr(value, "as_dict"):
+            kinds.update(self._operation_kinds_from(value.as_dict()))
+        return kinds
+
     def test_canonical_json_rejects_floats(self) -> None:
         with self.assertRaises(CanonicalJSONError):
             canonical_dumps({"score": 0.5})
@@ -2578,6 +2593,36 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(unknown["ok"])
             self.assertEqual(unknown["error"]["code"], "unknown_tool")
 
+    def test_runtime_moves_do_not_reference_deferred_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            adapter = MCPAdapter(runtime)
+            tool_names = {tool["name"] for tool in adapter.list_tools()}
+            virtual_operation_kinds = {"final_answer", "project_registry_search", "select_existing_claim"}
+            allowed = tool_names | virtual_operation_kinds
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            path = Path(tmp) / "guide.md"
+            path.write_text("# Guide\nUse settings.py.\n", encoding="utf-8")
+            document = runtime.ingest_file(workspace["id"], str(path)).data["source"]
+
+            responses = [
+                runtime.create_source(
+                    workspace["id"],
+                    source_kind="agent_observation",
+                    quote="Runtime source pressure must only suggest executable moves.",
+                    classification={"source_class": "runtime_observation", "document_kind": "implementation_note"},
+                    critique_status="audited",
+                ),
+                runtime.ingest_file(workspace["id"], str(path)),
+                runtime.record_detail(workspace["id"], document["id"]),
+                runtime.action_pressure(workspace["id"], action_kind="bash", action={"command": "pytest -q"}),
+            ]
+
+            for response in responses:
+                kinds = self._operation_kinds_from(response)
+                self.assertFalse({"classify_source", "accept_source", "reject_source"} & kinds)
+                self.assertTrue(kinds <= allowed, f"unsupported operation kinds: {sorted(kinds - allowed)}")
+
     def test_http_app_exposes_standalone_tool_api(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = TEPHTTPApp(MCPAdapter(Runtime(TEPHome(tmp))))
@@ -2739,7 +2784,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.21")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.22")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2798,7 +2843,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.21")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.22")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
