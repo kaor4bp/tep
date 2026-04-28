@@ -542,6 +542,10 @@ def pytest_summary(output: str) -> tuple[str | None, list[str]]:
     return summary, failed[:5]
 
 
+def is_pytest_command(command: str) -> bool:
+    return bool(re.search(r"(^|\s)(pytest|py\.test)(\s|$)", command) or " pytest " in f" {command} ")
+
+
 def pytest_failure_claims(command: str, output: str, limit: int = 10) -> list[str]:
     compact = compact_command(command)
     claims: list[str] = []
@@ -565,7 +569,7 @@ def pytest_failure_claims(command: str, output: str, limit: int = 10) -> list[st
 def command_observation_statement(command: str, code: int, stdout: str = "", stderr: str = "") -> str:
     compact = compact_command(command)
     combined = "\n".join(part for part in [stdout, stderr] if part)
-    if re.search(r"(^|\s)(pytest|py\.test)(\s|$)", command) or " pytest " in f" {command} ":
+    if is_pytest_command(command):
         summary, failed = pytest_summary(combined)
         if summary:
             statement = f"Pytest command `{compact}` completed with exit code {code}: {summary}."
@@ -576,6 +580,13 @@ def command_observation_statement(command: str, code: int, stdout: str = "", std
     if first_line:
         return f"Command `{compact}` exited with code {code}; first output line: {first_line}"
     return f"Command `{compact}` exited with code {code}."
+
+
+def should_create_command_summary_claim(command: str, code: int, stdout: str = "", stderr: str = "") -> bool:
+    if not is_pytest_command(command):
+        return False
+    summary, failed = pytest_summary("\n".join(part for part in [stdout, stderr] if part))
+    return bool(summary and (code != 0 or failed))
 
 
 def workspace_ref() -> str | None:
@@ -706,16 +717,32 @@ def handle_post_bash(payload: dict) -> int:
         source = source_response.get("data", {}).get("source") if isinstance(source_response, dict) and source_response.get("ok") else None
         if isinstance(source, dict):
             project_ref = pointer.get("project_ref")
-            payload_args = {"workspace_ref": wsp, "statement": statement, "source_refs": [source["id"]]}
-            if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
-                payload_args["project_refs"] = [project_ref]
-            call_tep(pointer, "create_claim", payload_args)
+            created_claims = 0
+            if should_create_command_summary_claim(command, code, stdout=stdout, stderr=stderr):
+                payload_args = {"workspace_ref": wsp, "statement": statement, "source_refs": [source["id"]]}
+                if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
+                    payload_args["project_refs"] = [project_ref]
+                response = call_tep(pointer, "create_claim", payload_args)
+                if isinstance(response, dict) and response.get("ok"):
+                    created_claims += 1
             combined = "\n".join(part for part in [stdout, stderr] if part)
             for detail_statement in pytest_failure_claims(command, combined):
                 detail_args = {"workspace_ref": wsp, "statement": detail_statement, "source_refs": [source["id"]]}
                 if isinstance(project_ref, str) and project_ref.startswith("PRJ-"):
                     detail_args["project_refs"] = [project_ref]
-                call_tep(pointer, "create_claim", detail_args)
+                response = call_tep(pointer, "create_claim", detail_args)
+                if isinstance(response, dict) and response.get("ok"):
+                    created_claims += 1
+            if created_claims:
+                emit_context(
+                    f"Captured RUN/SRC and {created_claims} narrow observation CLM. If this changes your model of the system, create separate system-behavior CLM-* facts and link them to the observation.",
+                    event="PostToolUse",
+                )
+            else:
+                emit_context(
+                    "Captured RUN/SRC only. Do not create a mechanical command CLM; create CLM-* only if you learned a system fact from this observation.",
+                    event="PostToolUse",
+                )
     return 0
 
 

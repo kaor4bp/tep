@@ -78,11 +78,13 @@ coordination but appendable only by their owner identity.
 The plugin ships Codex hook adapters for `SessionStart`, `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse`, and `Stop`. Hooks are conservative: they check
 visibility, block direct `.tep` writes, best-effort capture prompts and Bash
-runs through HTTP or local stdio fallback, create audited command observation
-claims from Bash results, and apply enforcement settings before Bash execution.
-Explicit MCP/tool calls remain the reliable path. Hooks cannot append sealed
-ledger rows without the current agent's in-memory private key; agents must still
-ledger support claims explicitly.
+runs through HTTP or local stdio fallback, capture Bash results as `RUN-*` and
+`SRC-*`, derive only narrow recognized observation claims, and apply enforcement
+settings before Bash execution. Do not treat a captured command as a system
+fact by itself: create `CLM-*` only when you can state what you learned about
+the system. Explicit MCP/tool calls remain the reliable path. Hooks cannot
+append sealed ledger rows without the current agent's in-memory private key;
+agents must still ledger support claims explicitly.
 
 ## Enforcement Settings
 

@@ -1681,10 +1681,10 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(run["command"], "echo ok")
             self.assertEqual(run["exit_code"], 0)
             claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
-            self.assertEqual(len(claims), 1)
-            claim = json.loads(claims[0].read_text(encoding="utf-8"))
-            self.assertIn("exited with code 0", claim["statement"])
-            self.assertEqual(claim["scope"]["project_refs"], [project["id"]])
+            self.assertEqual(len(claims), 0)
+            sources = sorted((tep_home / "records" / "sources").glob("**/SRC-*.json"))
+            self.assertEqual(len(sources), 1)
+            self.assertIn("Captured RUN/SRC only", completed.stdout)
 
     def test_codex_hook_resolves_latest_workspace_when_project_has_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1722,7 +1722,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(len(list((tep_home / "workspaces" / first["id"] / "records" / "run").glob("RUN-*.json"))), 0)
             self.assertEqual(len(list((tep_home / "workspaces" / second["id"] / "records" / "run").glob("RUN-*.json"))), 1)
             claims = sorted((tep_home / "records" / "claims").glob("**/CLM-*.json"))
-            self.assertEqual(len(claims), 1)
+            self.assertEqual(len(claims), 0)
 
     def test_codex_hook_creates_semantic_pytest_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2347,7 +2347,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.13")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.14")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2406,7 +2406,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.13")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.14")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
