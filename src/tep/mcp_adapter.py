@@ -134,6 +134,10 @@ class MCPAdapter:
                 MCPToolSpec("capture_source_excerpt", "source", True, "Capture an exact excerpt/span from an existing SRC-*.", ("workspace_ref", "source_ref", "quote"), ("locator",)),
                 self._capture_source_excerpt,
             ),
+            "capture_source_fragments": (
+                MCPToolSpec("capture_source_fragments", "source", True, "Split a long document SRC-* into navigable fragment SRC-* records.", ("workspace_ref", "source_ref"), ("max_chars",)),
+                self._capture_source_fragments,
+            ),
             "extract_claim_candidates": (
                 MCPToolSpec("extract_claim_candidates", "source", True, "Validate quote-backed claim candidates and capture excerpt SRC-* records.", ("workspace_ref", "source_ref", "candidates")),
                 self._extract_claim_candidates,
@@ -389,6 +393,11 @@ class MCPAdapter:
         payload = dict(args)
         workspace_ref = payload.pop("workspace_ref")
         return self.runtime.capture_source_excerpt(workspace_ref, **payload)
+
+    def _capture_source_fragments(self, args: dict[str, Any]) -> RuntimeResponse:
+        payload = dict(args)
+        workspace_ref = payload.pop("workspace_ref")
+        return self.runtime.capture_source_fragments(workspace_ref, **payload)
 
     def _extract_claim_candidates(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)

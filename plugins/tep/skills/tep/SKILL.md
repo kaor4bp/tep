@@ -169,6 +169,9 @@ important instruction, capture it before deriving claims:
 
 - Use `ingest_file` for a local file path.
 - Use `ingest_text` for pasted document content.
+- Use `capture_source_fragments` when an ingested document is too large to
+  inspect reliably as one source. Fragments are navigation units, not proof by
+  themselves.
 - Use `extract_claim_candidates` when deriving facts from a document: propose
   candidate `{quote, statement}` pairs so TEP can verify the quote exists and
   create excerpt evidence.
@@ -186,12 +189,13 @@ important instruction, capture it before deriving claims:
   commands when the output taught you something: propose exact output quotes
   plus atomic statements, then call `create_claim_from_evidence`.
 
-Do not create CLM facts directly from a whole document source. For uploaded
-documentation, extract one atomic quote into an excerpt `SRC-*`, then create one
-atomic CLM from that excerpt. Prefer the short path:
-`ingest_file -> extract_claim_candidates -> create_claim_from_evidence`. If no
-useful facts should be extracted, record that as a bounded decision instead of
-inventing claims.
+Do not create CLM facts directly from a whole document source or from a
+document fragment. For uploaded documentation, extract one atomic quote into an
+excerpt `SRC-*`, then create one atomic CLM from that excerpt. Prefer the short
+path: `ingest_file -> extract_claim_candidates -> create_claim_from_evidence`.
+For long documents, use `capture_source_fragments` first, then run
+`extract_claim_candidates` on selected fragments. If no useful facts should be
+extracted, record that as a bounded decision instead of inventing claims.
 
 For test and command evidence, do not stop at “pytest ran” or “command exited”.
 Use `extract_run_claim_candidates` for exact stdout/stderr quotes that reveal a

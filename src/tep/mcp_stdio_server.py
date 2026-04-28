@@ -19,7 +19,7 @@ from .runtime import Runtime
 from .storage import TEPHome
 
 
-SERVER_VERSION = "0.6.20"
+SERVER_VERSION = "0.6.21"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 
@@ -27,7 +27,7 @@ JsonObject = dict[str, Any]
 
 
 def _property_schema(name: str) -> JsonObject:
-    if name in {"exit_code", "limit"}:
+    if name in {"exit_code", "limit", "max_chars"}:
         return {"type": "integer"}
     if name in {"goals", "support_refs", "project_refs", "task_refs", "source_refs", "evidence_refs", "contradiction_refs", "roots", "aliases", "done_criteria"}:
         return {"type": "array", "items": {"type": "string"}}

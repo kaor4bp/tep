@@ -881,7 +881,8 @@ class TEPHome:
     def _source_requires_excerpt(source: dict[str, Any]) -> bool:
         if source.get("source_kind") != "file_quote":
             return False
-        if source.get("origin", {}).get("kind") != "file":
+        origin_kind = source.get("origin", {}).get("kind")
+        if origin_kind not in {"file", "source_fragment"}:
             return False
         document_kind = source.get("classification", {}).get("document_kind")
         if document_kind not in {"markdown", "text", "manual", "spec", "api_reference", "paper"}:
@@ -889,6 +890,8 @@ class TEPHome:
         quote = source.get("quote")
         if not isinstance(quote, str):
             return False
+        if origin_kind == "source_fragment":
+            return True
         span = source.get("provenance", {}).get("quote_span")
         return span == {"start": 0, "end": len(quote)}
 

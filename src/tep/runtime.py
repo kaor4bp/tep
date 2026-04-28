@@ -270,11 +270,7 @@ class Runtime:
     def create_source(self, workspace_ref: str, **kwargs: Any) -> RuntimeResponse:
         def op() -> RuntimeResponse:
             source = self.store.create_source(workspace_ref, **kwargs)
-            moves = [
-                move("mutate_record", "capture_source_excerpt", "Capture a precise source excerpt before creating document-backed claims.", writes=True),
-                move("mutate_record", "create_claim", "Create or select a CLM-* from captured source.", writes=True),
-                move("lookup", "lookup_facts", "Check for existing related claims."),
-            ]
+            moves = self._source_valid_moves(source)
             source_pressure = []
             if self.store._source_requires_excerpt(source):
                 source_pressure.append(
@@ -283,6 +279,8 @@ class Runtime:
                         "source_refs": [source["id"]],
                         "why": "document source requires excerpt-based extraction before CLM creation",
                         "valid_moves": [
+                            move("mutate_record", "extract_claim_candidates", "Extract quote-backed candidate CLM-* facts.", writes=True),
+                            move("mutate_record", "capture_source_fragments", "Split long document into navigable SRC-* fragments.", writes=True),
                             move("mutate_record", "capture_source_excerpt", "Capture exact quote/span for one atomic fact.", writes=True),
                             move("lookup", "lookup_facts", "Check whether the extracted fact already exists."),
                         ],
@@ -294,13 +292,72 @@ class Runtime:
                         "level": "medium",
                         "source_refs": [source["id"]],
                         "why": "source is captured but not accepted for commitment",
-                        "valid_moves": [
-                            move("mutate_record", "capture_source_excerpt", "Capture precise evidence for document claims.", writes=True),
-                            move("lookup", "lookup_facts", "Check for corroborating or conflicting facts."),
-                        ],
+                        "valid_moves": self._source_valid_moves(source),
                     }
                 )
             return ok_response({"source": source}, source_pressure=source_pressure, valid_moves=moves)
+
+        return self._guard(op)
+
+    def capture_source_fragments(
+        self,
+        workspace_ref: str,
+        *,
+        source_ref: str,
+        max_chars: int = 4000,
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            if max_chars < 500 or max_chars > 20000:
+                raise ValidationError("source_fragment_max_chars_out_of_range")
+            parent = self.store.read_source(workspace_ref, source_ref)
+            parent_quote = parent.get("quote")
+            if not isinstance(parent_quote, str):
+                raise ValidationError("source_fragment_requires_plaintext_parent")
+            spans = self._source_fragment_spans(parent_quote, max_chars=max_chars)
+            fragments = []
+            for index, span in enumerate(spans, start=1):
+                text = parent_quote[span["start"] : span["end"]]
+                classification = dict(parent.get("classification", {}))
+                classification["independence_key"] = f"{source_ref}:{span['start']}:{span['end']}"
+                fragment = self.store.create_source(
+                    workspace_ref,
+                    source_kind=parent.get("source_kind", "file_quote"),
+                    quote=text,
+                    classification=classification,
+                    origin={"kind": "source_fragment", "ref": source_ref},
+                    provenance={
+                        "entity_ref": parent.get("provenance", {}).get("entity_ref") or source_ref,
+                        "activity_ref": "capture_source_fragments",
+                        "responsible_agent": "runtime",
+                        "content_hash": self.store._captured_text_hash(text),
+                        "locator": f"{parent.get('provenance', {}).get('locator') or source_ref}#fragment-{index}",
+                        "quote_span": span,
+                        "retrieved_at": parent.get("provenance", {}).get("retrieved_at"),
+                        "published_at": parent.get("provenance", {}).get("published_at"),
+                    },
+                    project_refs=parent.get("project_refs", []),
+                    critique_status=parent.get("critique_status"),
+                    reason=f"fragment {index} captured from {source_ref}",
+                )
+                fragments.append(fragment)
+            return ok_response(
+                {"fragments": fragments, "parent_source_ref": source_ref},
+                source_pressure=[
+                    {
+                        "level": "medium",
+                        "source_refs": [fragment["id"] for fragment in fragments],
+                        "why": "fragments are navigation units; create CLM-* only from exact extracted quotes",
+                        "valid_moves": [
+                            move("mutate_record", "extract_claim_candidates", "Extract quote-backed claims from a fragment.", writes=True),
+                            move("lookup", "lookup_facts", "Check for duplicate or related facts."),
+                        ],
+                    }
+                ],
+                valid_moves=[
+                    move("mutate_record", "extract_claim_candidates", "Extract quote-backed claims from selected fragments.", writes=True),
+                    move("lookup", "lookup_facts", "Check for duplicate or related facts."),
+                ],
+            )
 
         return self._guard(op)
 
@@ -476,6 +533,39 @@ class Runtime:
             critique_status=parent.get("critique_status"),
             reason=f"excerpt captured from {source_ref}",
         )
+
+    def _source_valid_moves(self, source: dict[str, Any]) -> list[dict[str, Any]]:
+        if self.store._source_requires_excerpt(source):
+            return [
+                move("mutate_record", "extract_claim_candidates", "Extract quote-backed candidate CLM-* facts.", writes=True),
+                move("mutate_record", "capture_source_fragments", "Split long document into navigable SRC-* fragments.", writes=True),
+                move("mutate_record", "capture_source_excerpt", "Capture exact quote/span for one atomic fact.", writes=True),
+                move("lookup", "lookup_facts", "Check for existing related claims."),
+            ]
+        return [
+            move("mutate_record", "create_claim", "Create or select a CLM-* from captured source.", writes=True),
+            move("lookup", "lookup_facts", "Check for existing related claims."),
+        ]
+
+    @staticmethod
+    def _source_fragment_spans(text: str, *, max_chars: int) -> list[dict[str, int]]:
+        spans = []
+        start = 0
+        length = len(text)
+        while start < length:
+            end = min(start + max_chars, length)
+            if end < length:
+                paragraph_break = text.rfind("\n\n", start, end)
+                newline = text.rfind("\n", start, end)
+                space = text.rfind(" ", start, end)
+                split_at = max(paragraph_break + 2 if paragraph_break >= start else -1, newline + 1 if newline >= start else -1, space + 1 if space >= start else -1)
+                if split_at > start:
+                    end = split_at
+            if end <= start:
+                end = min(start + max_chars, length)
+            spans.append({"start": start, "end": end})
+            start = end
+        return spans
 
     def ingest_text(self, workspace_ref: str, text: str, **kwargs: Any) -> RuntimeResponse:
         def op() -> RuntimeResponse:
@@ -1234,11 +1324,7 @@ class Runtime:
                             ],
                         }
                     )
-                valid_moves = [
-                    move("mutate_record", "capture_source_excerpt", "Capture exact quote/span if this is a document source.", writes=True),
-                    move("mutate_record", "create_claim", "Create/select a CLM-* from this source.", writes=True),
-                    move("lookup", "lookup_facts", "Find claims using related material."),
-                ]
+                valid_moves = self._source_valid_moves(record)
             elif record_ref.startswith("TASK-"):
                 valid_moves = [
                     move("mutate_record", "decompose_task", "Split this task into subtasks.", writes=True),

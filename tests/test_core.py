@@ -1645,6 +1645,10 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(source["provenance"]["content_hash"], bytes_hash(path.read_bytes()))
             self.assertTrue(response.source_pressure)
             self.assertTrue(any(pressure["level"] == "high" for pressure in response.source_pressure))
+            move_kinds = {move["operation_kind"] for move in response.valid_moves}
+            self.assertIn("extract_claim_candidates", move_kinds)
+            self.assertIn("capture_source_fragments", move_kinds)
+            self.assertNotIn("create_claim", move_kinds)
 
     def test_ingest_file_rejects_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1682,6 +1686,41 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(excerpt_source["provenance"]["quote_span"], {"start": 15, "end": 45})
 
             claim = runtime.create_claim(workspace["id"], "The retry limit is 3 attempts.", source_refs=[excerpt_source["id"]])
+            self.assertTrue(claim.ok, claim.error)
+
+    def test_capture_source_fragments_keeps_claims_on_exact_excerpt_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            path = Path(tmp) / "guide.md"
+            text = "A" * 900 + "\n\nThe retry limit is 3 attempts.\n" + "B" * 900
+            path.write_text(text, encoding="utf-8")
+
+            document = runtime.ingest_file(workspace["id"], str(path), source_class="first_party_project").data["source"]
+            fragments_response = runtime.capture_source_fragments(workspace["id"], source_ref=document["id"], max_chars=600)
+
+            self.assertTrue(fragments_response.ok, fragments_response.error)
+            fragments = fragments_response.data["fragments"]
+            self.assertGreater(len(fragments), 1)
+            self.assertEqual(fragments[0]["origin"], {"kind": "source_fragment", "ref": document["id"]})
+            self.assertIn("extract_claim_candidates", {move["operation_kind"] for move in fragments_response.valid_moves})
+
+            fragment_with_fact = next(fragment for fragment in fragments if "The retry limit" in fragment["quote"])
+            blocked = runtime.create_claim(workspace["id"], "The retry limit is 3 attempts.", source_refs=[fragment_with_fact["id"]])
+            self.assertFalse(blocked.ok)
+            self.assertIn("document_source_requires_excerpt", blocked.error["message"])
+
+            candidates = runtime.extract_claim_candidates(
+                workspace["id"],
+                source_ref=fragment_with_fact["id"],
+                candidates=[{"quote": "The retry limit is 3 attempts.", "statement": "The retry limit is 3 attempts."}],
+            )
+            self.assertTrue(candidates.ok, candidates.error)
+            claim = runtime.create_claim_from_evidence(
+                workspace["id"],
+                statement="The retry limit is 3 attempts.",
+                evidence_refs=[candidates.data["claim_candidates"][0]["excerpt_source_ref"]],
+            )
             self.assertTrue(claim.ok, claim.error)
 
     def test_extract_claim_candidates_and_create_claim_from_evidence(self) -> None:
@@ -2440,6 +2479,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("task_done_preflight", tool_names)
             self.assertIn("ingest_file", tool_names)
             self.assertIn("capture_source_excerpt", tool_names)
+            self.assertIn("capture_source_fragments", tool_names)
             self.assertIn("extract_claim_candidates", tool_names)
             self.assertIn("create_claim_from_evidence", tool_names)
             self.assertIn("capture_input", tool_names)
@@ -2699,7 +2739,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.20")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.21")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2758,7 +2798,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.20")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.21")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

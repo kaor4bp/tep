@@ -457,6 +457,13 @@ as excerpt capture, lookup, or recapture.
 whole ingested document. If the quote is not found in the parent source, the
 mutation writes nothing.
 
+`capture_source_fragments`
+: Split a large plaintext document `SRC-*` into smaller `SRC-*` records with
+`origin.kind = "source_fragment"` and parent-relative `quote_span`. Fragments
+are navigation/review units only: claims still cannot cite them directly and
+must use exact excerpt evidence produced by `extract_claim_candidates` or
+`capture_source_excerpt`.
+
 `extract_claim_candidates`
 : Validate agent-proposed document fact candidates. Input is a source plus
 candidate objects containing at least `quote` and `statement`. Runtime verifies
@@ -466,8 +473,8 @@ next step. This tool does not decide truth by itself; it makes extraction
 auditable and span-bound.
 
 `classify_source`, `accept_source`, `reject_source`
-: Deferred source-audit operations. Do not return these operation kinds from v1
-runtime `valid_moves` until the typed tools are implemented.
+: Deferred source-audit operations. Runtime must not return these operation
+kinds in `valid_moves` until the typed tools are implemented.
 
 `create_claim`
 : Create a `CLM-*`. Runtime computes exact `dedup_key` before write. Exact
