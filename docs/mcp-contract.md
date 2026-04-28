@@ -546,11 +546,17 @@ capture as `SRC-*`, or write to `RUN-*`.
 
 Required input includes target claim/relation refs, intent, allowed action kind,
 scope, expected evidence, and the same explicit in-memory signing parameter.
+The target must be a narrow current action intent or probe hypothesis, not a
+broad historical run summary or pure runtime/command observation. Broad targets
+return `act_target_too_broad`; pure observation targets return
+`act_target_observation_only`.
 
 `protected_action_preflight`
 : Validate that a protected action matches the current open ACT. Returns an
 action token/id bound to ACT, action kind, command/action hash, cwd/scope, and
-expiry.
+expiry. The open ACT must still be fresh under
+`settings.enforcement.act_timeout_seconds`; expired ACTs return
+`open_act_expired` and should be closed or replaced with a fresh ACT.
 
 `record_run`
 : Record a `RUN-*` for an executed command/tool/action. It must link to the

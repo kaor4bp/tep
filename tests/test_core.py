@@ -708,6 +708,108 @@ class CoreTests(unittest.TestCase):
             self.assertIsNone(closed.ledger_pressure["open_act"])
             self.assertTrue(closed.ledger_pressure["ledger_valid"])
 
+    def test_open_probe_rejects_broad_or_observation_only_claim_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("probe-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+
+            broad = runtime.create_claim(
+                workspace["id"],
+                (
+                    "The previous pytest run completed with many failures, several setup errors, "
+                    "multiple passing backend checks, and a dominant UI start-session cluster, "
+                    "so it summarizes historical run state rather than a narrow next probe intent."
+                ),
+            ).data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=broad["id"],
+                why="Snapshot broad historical run summary.",
+                difficulty_bits=8,
+            )
+
+            broad_act = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=broad["id"],
+                intent="Run tests from broad summary.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            self.assertFalse(broad_act.ok)
+            self.assertIn("act_target_too_broad", broad_act.error["message"])
+
+            run = runtime.capture_bash_command(workspace["id"], command="pytest -q", cwd=tmp, exit_code=1, stdout="1 failed\n").data["run"]
+            source = runtime.capture_run_output_source(workspace["id"], run_ref=run["id"], stream="stdout").data["source"]
+            observation = runtime.create_claim(workspace["id"], "Pytest observed one failing test.", source_refs=[source["id"]]).data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=observation["id"],
+                why="Snapshot runtime observation.",
+                difficulty_bits=8,
+            )
+
+            observation_act = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=observation["id"],
+                intent="Use observation as next ACT target.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            self.assertFalse(observation_act.ok)
+            self.assertIn("act_target_observation_only", observation_act.error["message"])
+
+    def test_protected_action_preflight_rejects_expired_act(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            runtime.update_settings({"enforcement": {"act_timeout_seconds": 0}}, workspace_ref=workspace["id"])
+            identity = generate_agent_identity("timeout-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            claim = runtime.create_claim(workspace["id"], "Run tests to inspect current behavior.").data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot action intent.",
+                difficulty_bits=8,
+            )
+            opened = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Run pytest to inspect current behavior.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            self.assertTrue(opened.ok, opened.error)
+
+            preflight = runtime.protected_action_preflight(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                action_kind="bash",
+                action={"command": "pytest -q"},
+            )
+            self.assertFalse(preflight.ok)
+            self.assertIn("open_act_expired", preflight.error["message"])
+
     def test_strict_task_context_gate_blocks_act_until_all_required_packs_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -1833,6 +1935,32 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertIn("Open an ACT", output["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_codex_hook_blocks_default_pytest_without_open_act(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "pytest -q"}}),
+                text=True,
+                capture_output=True,
+                env=dict(os.environ),
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertIn("classification=evidence_producing", output["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_codex_hook_blocks_task_bash_when_required_context_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
@@ -1957,7 +2085,7 @@ class CoreTests(unittest.TestCase):
                 input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "rg -n settings src"}}),
                 text=True,
                 capture_output=True,
-                env=dict(os.environ),
+                env={**dict(os.environ), "TEP_AGENT_REF": agent["id"]},
                 check=False,
             )
 
@@ -2370,7 +2498,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.16")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.17")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2429,7 +2557,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.16")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.17")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

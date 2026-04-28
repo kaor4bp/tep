@@ -10,7 +10,7 @@ from .errors import OwnershipError, ValidationError
 from .ids import ledger_id
 from .jsoncanon import canonical_bytes, canonical_hash
 from .pow import mine_pow, verify_pow
-from .storage import TEPHome
+from .storage import TEPHome, utc_now
 
 
 @dataclass(frozen=True)
@@ -193,6 +193,7 @@ class Ledger:
             "kind": kind,
             "ref": claim_ref,
             "rev": rev,
+            "created_at": utc_now(),
             "why": why,
             "ledger_context_hash": context_hash,
             "claim_snapshot": claim_snapshot,

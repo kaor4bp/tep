@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
@@ -25,6 +26,7 @@ DEFAULT_SETTINGS = {
         "edit_policy": "act_required",
         "final_policy": "preflight_required",
         "unknown_action_policy": "block_until_act",
+        "act_timeout_seconds": 3600,
         "context_requirements": {},
     },
 }
@@ -240,33 +242,38 @@ def classify_bash(command: str) -> str:
     return "unknown"
 
 
-def open_act_ref(pointer: dict, workspace: str | None) -> str | None:
+def open_act_ref(pointer: dict, workspace: str | None, settings: dict[str, Any] | None = None) -> str | None:
     explicit = os.environ.get("TEP_OPEN_ACT_REF")
     if explicit and explicit.startswith("L-"):
         return explicit
     agent_ref = os.environ.get("TEP_AGENT_REF")
-    if not workspace:
+    if not workspace or not agent_ref:
         return None
     home = tep_home(pointer)
-    if agent_ref:
-        return open_act_in_ledger(home / "workspaces" / workspace / "agents" / agent_ref / "ledger.jsonl")
-    open_refs = [
-        ref
-        for ledger_path in sorted((home / "workspaces" / workspace / "agents").glob("AGENT-*/ledger.jsonl"))
-        if (ref := open_act_in_ledger(ledger_path)) is not None
-    ]
-    return open_refs[0] if len(open_refs) == 1 else None
+    timeout = int((settings or DEFAULT_SETTINGS).get("enforcement", {}).get("act_timeout_seconds", 3600))
+    return open_act_in_ledger(home / "workspaces" / workspace / "agents" / agent_ref / "ledger.jsonl", timeout_seconds=timeout)
 
 
-def open_act_in_ledger(ledger_path: Path) -> str | None:
+def open_act_in_ledger(ledger_path: Path, *, timeout_seconds: int = 3600) -> str | None:
     rows = read_jsonl(ledger_path)
     open_ref = None
+    open_created_at = None
     for row in rows:
         if row.get("kind") == "act":
             open_ref = row.get("id")
+            open_created_at = row.get("created_at")
         elif row.get("kind") == "close_act":
             open_ref = None
-    return open_ref if isinstance(open_ref, str) else None
+            open_created_at = None
+    if not isinstance(open_ref, str) or not isinstance(open_created_at, str):
+        return None
+    try:
+        opened = datetime.fromisoformat(open_created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if int((datetime.now(UTC) - opened).total_seconds()) >= timeout_seconds:
+        return None
+    return open_ref
 
 
 def active_task_ref(pointer: dict, workspace: str | None) -> str | None:
@@ -641,7 +648,7 @@ def handle_pre_bash(payload: dict) -> int:
             "Use lookup_facts and compile_context_pack before running task-bound Bash."
         )
         return 0
-    pressure = bash_pressure(settings, classify_bash(command), open_act_ref(pointer, wsp))
+    pressure = bash_pressure(settings, classify_bash(command), open_act_ref(pointer, wsp, settings))
     if pressure["blocked"]:
         emit_deny(
             "Bash action is blocked by TEP enforcement settings. "

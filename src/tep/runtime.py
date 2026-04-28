@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Any, Callable
 
 from .crypto import AgentIdentity, assert_private_key_matches, generate_agent_identity
@@ -625,6 +626,7 @@ class Runtime:
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
             self._require_task_context_ready(workspace_ref, agent_ref)
+            self._validate_act_target_claim(workspace_ref, claim_ref)
             ledger = Ledger(self.store, workspace_ref, agent_ref)
             result = ledger.open_probe(
                 private_key=private_key,
@@ -733,6 +735,7 @@ class Runtime:
             open_act = ledger.current_open_act_row()
             if open_act is None:
                 raise ValidationError("open_act_required")
+            self._require_open_act_fresh(workspace_ref, open_act)
             allowed_action_kind = open_act.get("act", {}).get("allowed_action_kind")
             if allowed_action_kind not in {action_kind, "*"}:
                 raise ValidationError(f"action_kind_not_allowed:{action_kind}")
@@ -1058,6 +1061,33 @@ class Runtime:
             return error_response("validation_failed", message, repair_options=[move("brief", "brief_current_context", "Refresh protocol context.")])
         except TEPError as exc:
             return error_response("protocol_error", str(exc), repair_options=[move("validate", "validate_ledger", "Validate current protocol state.")])
+
+    def _validate_act_target_claim(self, workspace_ref: str, claim_ref: str) -> None:
+        claim = self.store.read_claim(workspace_ref, claim_ref)
+        if self._claim_analysis_pressure(claim):
+            raise ValidationError("act_target_too_broad")
+        source_refs = claim.get("source_refs", [])
+        if not source_refs:
+            return
+        sources = [self.store.read_source(workspace_ref, source_ref) for source_ref in source_refs]
+        source_classes = {source.get("classification", {}).get("source_class") for source in sources}
+        source_kinds = {source.get("source_kind") for source in sources}
+        observation_only = source_classes.issubset({"runtime_observation", "test_or_check"}) or source_kinds.issubset({"command_output", "command_summary"})
+        if observation_only and not claim.get("relation") and not claim.get("support_refs"):
+            raise ValidationError("act_target_observation_only")
+
+    def _require_open_act_fresh(self, workspace_ref: str, open_act: dict[str, Any]) -> None:
+        timeout = int(self.store.read_settings(workspace_ref)["enforcement"].get("act_timeout_seconds", 3600))
+        created_at = open_act.get("created_at")
+        if not isinstance(created_at, str):
+            raise ValidationError("open_act_expired:missing_created_at")
+        try:
+            opened = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValidationError("open_act_expired:invalid_created_at") from exc
+        age_seconds = int((datetime.now(UTC) - opened).total_seconds())
+        if age_seconds >= timeout:
+            raise ValidationError(f"open_act_expired:{age_seconds}s>{timeout}s")
 
     def _claim_analysis_pressure(self, claim: dict[str, Any]) -> list[dict[str, Any]]:
         statement = str(claim.get("statement") or "")

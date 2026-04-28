@@ -22,6 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "edit_policy": "act_required",
         "final_policy": "preflight_required",
         "unknown_action_policy": "block_until_act",
+        "act_timeout_seconds": 3600,
         "context_requirements": {},
     },
 }
@@ -79,6 +80,8 @@ def validate_settings(settings: dict[str, Any]) -> None:
         raise ValidationError("unsupported_unknown_action_policy")
     if not isinstance(enforcement.get("session_start_requires_frame"), bool):
         raise ValidationError("session_start_requires_frame must be boolean")
+    if not isinstance(enforcement.get("act_timeout_seconds"), int) or enforcement["act_timeout_seconds"] < 0:
+        raise ValidationError("act_timeout_seconds must be a non-negative integer")
     context_requirements = enforcement.get("context_requirements", {})
     if not isinstance(context_requirements, dict):
         raise ValidationError("context_requirements must be an object")
