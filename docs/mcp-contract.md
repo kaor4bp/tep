@@ -457,6 +457,14 @@ as excerpt capture, lookup, or recapture.
 whole ingested document. If the quote is not found in the parent source, the
 mutation writes nothing.
 
+`extract_claim_candidates`
+: Validate agent-proposed document fact candidates. Input is a source plus
+candidate objects containing at least `quote` and `statement`. Runtime verifies
+each quote exists in the parent source, captures one excerpt `SRC-*` per
+candidate, and returns candidate packages with `excerpt_source_ref` for the
+next step. This tool does not decide truth by itself; it makes extraction
+auditable and span-bound.
+
 `classify_source`, `accept_source`, `reject_source`
 : Deferred source-audit operations. Do not return these operation kinds from v1
 runtime `valid_moves` until the typed tools are implemented.
@@ -481,6 +489,12 @@ fail or be converted into valid verification moves; MCP must not create a
 hypothesis-on-hypothesis chain.
 Claims citing whole document sources fail with
 `document_source_requires_excerpt`; capture an exact excerpt first.
+
+`create_claim_from_evidence`
+: Create one atomic `CLM-*` from captured excerpt evidence. It accepts
+`evidence_refs` that point to excerpt `SRC-*` records, rejects whole-document
+sources, and rejects broad or compound statements before writing. This is the
+preferred commit path after `extract_claim_candidates`.
 
 `update_claim`
 : Update a `CLM-*`. If the claim is later used in ledger, the ledger snapshots

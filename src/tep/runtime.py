@@ -313,47 +313,169 @@ class Runtime:
         locator: str | None = None,
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
-            parent = self.store.read_source(workspace_ref, source_ref)
-            parent_quote = parent.get("quote")
-            if not isinstance(parent_quote, str):
-                raise ValidationError("source_excerpt_requires_plaintext_parent")
-            if not quote:
-                raise ValidationError("source_excerpt_requires_non_empty_quote")
-            start = parent_quote.find(quote)
-            if start < 0:
-                raise ValidationError("quote_not_found_in_source")
-            end = start + len(quote)
-            classification = dict(parent.get("classification", {}))
-            classification["independence_key"] = f"{source_ref}:{start}:{end}"
-            source = self.store.create_source(
-                workspace_ref,
-                source_kind=parent.get("source_kind", "file_quote"),
-                quote=quote,
-                classification=classification,
-                origin={"kind": "source_excerpt", "ref": source_ref},
-                provenance={
-                    "entity_ref": parent.get("provenance", {}).get("entity_ref") or source_ref,
-                    "activity_ref": "capture_source_excerpt",
-                    "responsible_agent": "runtime",
-                    "content_hash": self.store._captured_text_hash(quote),
-                    "locator": locator or parent.get("provenance", {}).get("locator") or source_ref,
-                    "quote_span": {"start": start, "end": end},
-                    "retrieved_at": parent.get("provenance", {}).get("retrieved_at"),
-                    "published_at": parent.get("provenance", {}).get("published_at"),
-                },
-                project_refs=parent.get("project_refs", []),
-                critique_status=parent.get("critique_status"),
-                reason=f"excerpt captured from {source_ref}",
-            )
+            source = self._capture_excerpt_source(workspace_ref, source_ref=source_ref, quote=quote, locator=locator)
             return ok_response(
                 {"source": source, "parent_source_ref": source_ref},
                 valid_moves=[
-                    move("mutate_record", "create_claim", "Create one atomic CLM-* from this excerpt.", writes=True),
+                    move("mutate_record", "create_claim_from_evidence", "Create one atomic CLM-* from this excerpt.", writes=True),
                     move("lookup", "lookup_facts", "Check for duplicate or related claims."),
                 ],
             )
 
         return self._guard(op)
+
+    def extract_claim_candidates(
+        self,
+        workspace_ref: str,
+        *,
+        source_ref: str,
+        candidates: list[dict[str, Any]],
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            if not candidates:
+                raise ValidationError("extract_claim_candidates_requires_candidates")
+            parent = self.store.read_source(workspace_ref, source_ref)
+            parent_quote = parent.get("quote")
+            if not isinstance(parent_quote, str):
+                raise ValidationError("source_excerpt_requires_plaintext_parent")
+            prepared = []
+            for index, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    raise ValidationError(f"claim_candidate_invalid:{index}")
+                quote = str(candidate.get("quote") or "").strip()
+                statement = str(candidate.get("statement") or "").strip()
+                if not quote:
+                    raise ValidationError(f"claim_candidate_quote_required:{index}")
+                if not statement:
+                    raise ValidationError(f"claim_candidate_statement_required:{index}")
+                claim_kind = str(candidate.get("claim_kind") or "other")
+                confidence_bps = candidate.get("confidence_bps")
+                if confidence_bps is not None and (not isinstance(confidence_bps, int) or confidence_bps < 0 or confidence_bps > 10000):
+                    raise ValidationError(f"claim_candidate_confidence_bps_invalid:{index}")
+                start = parent_quote.find(quote)
+                if start < 0:
+                    raise ValidationError(f"quote_not_found_in_source:{index}")
+                prepared.append(
+                    {
+                        "index": index,
+                        "quote": quote,
+                        "statement": statement,
+                        "claim_kind": claim_kind,
+                        "confidence_bps": confidence_bps,
+                        "why_this_follows": str(candidate.get("why_this_follows") or ""),
+                        "locator": candidate.get("locator"),
+                        "quote_span": {"start": start, "end": start + len(quote)},
+                    }
+                )
+            extracted = []
+            for candidate in prepared:
+                source = self._capture_excerpt_source(
+                    workspace_ref,
+                    source_ref=source_ref,
+                    quote=candidate["quote"],
+                    locator=candidate.get("locator"),
+                )
+                extracted.append(
+                    {
+                        "index": candidate["index"],
+                        "source_ref": source_ref,
+                        "excerpt_source_ref": source["id"],
+                        "statement": candidate["statement"],
+                        "claim_kind": candidate["claim_kind"],
+                        "confidence_bps": candidate["confidence_bps"],
+                        "why_this_follows": candidate["why_this_follows"],
+                        "quote_span": source.get("provenance", {}).get("quote_span"),
+                    }
+                )
+            return ok_response(
+                {"claim_candidates": extracted},
+                source_pressure=[
+                    {
+                        "level": "medium",
+                        "source_refs": [source_ref],
+                        "why": "candidate excerpts are captured but not yet committed as CLM-* facts",
+                        "valid_moves": [
+                            move("mutate_record", "create_claim_from_evidence", "Create one atomic CLM-* per useful candidate.", writes=True),
+                            move("lookup", "lookup_facts", "Check for duplicate or related claims before committing."),
+                        ],
+                    }
+                ],
+                valid_moves=[
+                    move("mutate_record", "create_claim_from_evidence", "Create one atomic CLM-* from an excerpt candidate.", writes=True),
+                    move("lookup", "lookup_facts", "Check for duplicate or related claims."),
+                ],
+            )
+
+        return self._guard(op)
+
+    def create_claim_from_evidence(
+        self,
+        workspace_ref: str,
+        *,
+        statement: str,
+        evidence_refs: list[str],
+        claim_kind: str = "other",
+        project_refs: list[str] | None = None,
+        task_refs: list[str] | None = None,
+        support_refs: list[str] | None = None,
+        contradiction_refs: list[str] | None = None,
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            if not evidence_refs:
+                raise ValidationError("create_claim_from_evidence_requires_evidence_refs")
+            for source_ref in evidence_refs:
+                source = self.store.read_source(workspace_ref, source_ref)
+                if source.get("origin", {}).get("kind") != "source_excerpt":
+                    raise ValidationError(f"claim_evidence_requires_excerpt:{source_ref}")
+            candidate_pressure = self._claim_analysis_pressure({"id": "CLM-candidate", "statement": statement, "relation": None})
+            if candidate_pressure:
+                raise ValidationError("claim_from_evidence_not_atomic")
+            return self.create_claim(
+                workspace_ref,
+                statement,
+                claim_kind=claim_kind,
+                source_refs=evidence_refs,
+                project_refs=project_refs,
+                task_refs=task_refs,
+                support_refs=support_refs,
+                contradiction_refs=contradiction_refs,
+            )
+
+        return self._guard(op)
+
+    def _capture_excerpt_source(self, workspace_ref: str, *, source_ref: str, quote: str, locator: str | None = None) -> dict[str, Any]:
+        parent = self.store.read_source(workspace_ref, source_ref)
+        parent_quote = parent.get("quote")
+        if not isinstance(parent_quote, str):
+            raise ValidationError("source_excerpt_requires_plaintext_parent")
+        if not quote:
+            raise ValidationError("source_excerpt_requires_non_empty_quote")
+        start = parent_quote.find(quote)
+        if start < 0:
+            raise ValidationError("quote_not_found_in_source")
+        end = start + len(quote)
+        classification = dict(parent.get("classification", {}))
+        classification["independence_key"] = f"{source_ref}:{start}:{end}"
+        return self.store.create_source(
+            workspace_ref,
+            source_kind=parent.get("source_kind", "file_quote"),
+            quote=quote,
+            classification=classification,
+            origin={"kind": "source_excerpt", "ref": source_ref},
+            provenance={
+                "entity_ref": parent.get("provenance", {}).get("entity_ref") or source_ref,
+                "activity_ref": "capture_source_excerpt",
+                "responsible_agent": "runtime",
+                "content_hash": self.store._captured_text_hash(quote),
+                "locator": locator or parent.get("provenance", {}).get("locator") or source_ref,
+                "quote_span": {"start": start, "end": end},
+                "retrieved_at": parent.get("provenance", {}).get("retrieved_at"),
+                "published_at": parent.get("provenance", {}).get("published_at"),
+            },
+            project_refs=parent.get("project_refs", []),
+            critique_status=parent.get("critique_status"),
+            reason=f"excerpt captured from {source_ref}",
+        )
 
     def ingest_text(self, workspace_ref: str, text: str, **kwargs: Any) -> RuntimeResponse:
         def op() -> RuntimeResponse:

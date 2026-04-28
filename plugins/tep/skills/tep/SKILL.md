@@ -169,8 +169,15 @@ important instruction, capture it before deriving claims:
 
 - Use `ingest_file` for a local file path.
 - Use `ingest_text` for pasted document content.
+- Use `extract_claim_candidates` when deriving facts from a document: propose
+  candidate `{quote, statement}` pairs so TEP can verify the quote exists and
+  create excerpt evidence.
 - Use `capture_source_excerpt` to capture the exact quote/span for each
-  document-backed fact before creating a `CLM-*`.
+  document-backed fact before creating a `CLM-*` when you are doing the excerpt
+  step manually.
+- Use `create_claim_from_evidence` for document-backed CLMs after excerpt
+  evidence exists. It rejects whole-document evidence and broad compound
+  statements.
 - Use `capture_input` for user instructions, assumptions, corrections, and
   approvals.
 - Use `capture_bash_command` after running a command.
@@ -178,8 +185,10 @@ important instruction, capture it before deriving claims:
 
 Do not create CLM facts directly from a whole document source. For uploaded
 documentation, extract one atomic quote into an excerpt `SRC-*`, then create one
-atomic CLM from that excerpt. If no useful facts should be extracted, record
-that as a bounded decision instead of inventing claims.
+atomic CLM from that excerpt. Prefer the short path:
+`ingest_file -> extract_claim_candidates -> create_claim_from_evidence`. If no
+useful facts should be extracted, record that as a bounded decision instead of
+inventing claims.
 
 Secrets are not ignored. TEP may encrypt sensitive payload fields with the host
 key. Only call `decrypt_sensitive_field` when the task genuinely needs the

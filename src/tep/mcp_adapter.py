@@ -134,6 +134,10 @@ class MCPAdapter:
                 MCPToolSpec("capture_source_excerpt", "source", True, "Capture an exact excerpt/span from an existing SRC-*.", ("workspace_ref", "source_ref", "quote"), ("locator",)),
                 self._capture_source_excerpt,
             ),
+            "extract_claim_candidates": (
+                MCPToolSpec("extract_claim_candidates", "source", True, "Validate quote-backed claim candidates and capture excerpt SRC-* records.", ("workspace_ref", "source_ref", "candidates")),
+                self._extract_claim_candidates,
+            ),
             "capture_input": (
                 MCPToolSpec("capture_input", "input", True, "Capture an INP-* event and source.", ("workspace_ref", "text", "input_class")),
                 self._capture_input,
@@ -153,6 +157,17 @@ class MCPAdapter:
             "create_claim": (
                 MCPToolSpec("create_claim", "claim", True, "Create CLM-* through typed claim API.", ("workspace_ref", "statement")),
                 self._create_claim,
+            ),
+            "create_claim_from_evidence": (
+                MCPToolSpec(
+                    "create_claim_from_evidence",
+                    "claim",
+                    True,
+                    "Create one atomic CLM-* from captured excerpt evidence.",
+                    ("workspace_ref", "statement", "evidence_refs"),
+                    ("claim_kind", "project_refs", "task_refs", "support_refs", "contradiction_refs"),
+                ),
+                self._create_claim_from_evidence,
             ),
             "link_claims": (
                 MCPToolSpec("link_claims", "claim", True, "Create relation CLM-* between claims.", ("workspace_ref", "relation_type", "subject_ref", "object_ref")),
@@ -371,6 +386,11 @@ class MCPAdapter:
         workspace_ref = payload.pop("workspace_ref")
         return self.runtime.capture_source_excerpt(workspace_ref, **payload)
 
+    def _extract_claim_candidates(self, args: dict[str, Any]) -> RuntimeResponse:
+        payload = dict(args)
+        workspace_ref = payload.pop("workspace_ref")
+        return self.runtime.extract_claim_candidates(workspace_ref, **payload)
+
     def _capture_input(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)
         workspace_ref = payload.pop("workspace_ref")
@@ -394,6 +414,11 @@ class MCPAdapter:
         workspace_ref = payload.pop("workspace_ref")
         statement = payload.pop("statement")
         return self.runtime.create_claim(workspace_ref, statement, **payload)
+
+    def _create_claim_from_evidence(self, args: dict[str, Any]) -> RuntimeResponse:
+        payload = dict(args)
+        workspace_ref = payload.pop("workspace_ref")
+        return self.runtime.create_claim_from_evidence(workspace_ref, **payload)
 
     def _link_claims(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)

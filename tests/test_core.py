@@ -1684,6 +1684,85 @@ class CoreTests(unittest.TestCase):
             claim = runtime.create_claim(workspace["id"], "The retry limit is 3 attempts.", source_refs=[excerpt_source["id"]])
             self.assertTrue(claim.ok, claim.error)
 
+    def test_extract_claim_candidates_and_create_claim_from_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            path = Path(tmp) / "guide.md"
+            path.write_text("# Retry policy\nThe retry limit is 3 attempts.\nUse exponential backoff.\n", encoding="utf-8")
+
+            document = runtime.ingest_file(workspace["id"], str(path), source_class="first_party_project").data["source"]
+            source_count_before_failed_extract = len(list(Path(tmp).rglob("SRC-*.json")))
+            failed_candidates = runtime.extract_claim_candidates(
+                workspace["id"],
+                source_ref=document["id"],
+                candidates=[
+                    {"quote": "Use exponential backoff.", "statement": "Retry policy uses exponential backoff."},
+                    {"quote": "Missing quote.", "statement": "Missing quote should not write a partial excerpt."},
+                ],
+            )
+            self.assertFalse(failed_candidates.ok)
+            self.assertIn("quote_not_found_in_source:1", failed_candidates.error["message"])
+            self.assertEqual(len(list(Path(tmp).rglob("SRC-*.json"))), source_count_before_failed_extract)
+
+            candidates = runtime.extract_claim_candidates(
+                workspace["id"],
+                source_ref=document["id"],
+                candidates=[
+                    {
+                        "quote": "Use exponential backoff.",
+                        "statement": "Retry policy uses exponential backoff.",
+                        "claim_kind": "implementation_fact",
+                        "confidence_bps": 9000,
+                        "why_this_follows": "The source states the retry policy instruction directly.",
+                    }
+                ],
+            )
+
+            self.assertTrue(candidates.ok, candidates.error)
+            candidate = candidates.data["claim_candidates"][0]
+            self.assertEqual(candidate["statement"], "Retry policy uses exponential backoff.")
+            self.assertEqual(candidate["quote_span"], {"start": 46, "end": 70})
+            self.assertIn("create_claim_from_evidence", {move["operation_kind"] for move in candidates.valid_moves})
+
+            claim = runtime.create_claim_from_evidence(
+                workspace["id"],
+                statement=candidate["statement"],
+                evidence_refs=[candidate["excerpt_source_ref"]],
+                claim_kind=candidate["claim_kind"],
+            )
+            self.assertTrue(claim.ok, claim.error)
+            self.assertEqual(claim.data["claim"]["source_refs"], [candidate["excerpt_source_ref"]])
+
+    def test_create_claim_from_evidence_requires_excerpt_and_atomic_statement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            path = Path(tmp) / "guide.md"
+            path.write_text("# Retry policy\nThe retry limit is 3 attempts.\nUse backoff.\n", encoding="utf-8")
+
+            document = runtime.ingest_file(workspace["id"], str(path), source_class="first_party_project").data["source"]
+            whole_document = runtime.create_claim_from_evidence(
+                workspace["id"],
+                statement="The retry limit is 3 attempts.",
+                evidence_refs=[document["id"]],
+            )
+            self.assertFalse(whole_document.ok)
+            self.assertIn("claim_evidence_requires_excerpt", whole_document.error["message"])
+
+            excerpt = runtime.capture_source_excerpt(
+                workspace["id"],
+                source_ref=document["id"],
+                quote="The retry limit is 3 attempts.",
+            ).data["source"]
+            broad = runtime.create_claim_from_evidence(
+                workspace["id"],
+                statement="The retry limit is 3 attempts and the policy uses backoff because the guide says so.",
+                evidence_refs=[excerpt["id"]],
+            )
+            self.assertFalse(broad.ok)
+            self.assertIn("claim_from_evidence_not_atomic", broad.error["message"])
+
     def test_capture_input_creates_inp_and_source_hook_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2271,6 +2350,8 @@ class CoreTests(unittest.TestCase):
             self.assertIn("task_done_preflight", tool_names)
             self.assertIn("ingest_file", tool_names)
             self.assertIn("capture_source_excerpt", tool_names)
+            self.assertIn("extract_claim_candidates", tool_names)
+            self.assertIn("create_claim_from_evidence", tool_names)
             self.assertIn("capture_input", tool_names)
             self.assertIn("capture_bash_command", tool_names)
             self.assertIn("capture_run_output_source", tool_names)
@@ -2527,7 +2608,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.18")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.19")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2586,7 +2667,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.18")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.19")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
