@@ -1644,6 +1644,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(source["project_refs"], ["PRJ-example"])
             self.assertEqual(source["provenance"]["content_hash"], bytes_hash(path.read_bytes()))
             self.assertTrue(response.source_pressure)
+            self.assertTrue(any(pressure["level"] == "high" for pressure in response.source_pressure))
 
     def test_ingest_file_rejects_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1655,6 +1656,33 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(response.ok)
             self.assertEqual(response.error["code"], "validation_failed")
             self.assertIn("file_not_found", response.error["message"])
+
+    def test_document_claim_requires_captured_excerpt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            path = Path(tmp) / "guide.md"
+            path.write_text("# Retry policy\nThe retry limit is 3 attempts.\nUse backoff.\n", encoding="utf-8")
+
+            document = runtime.ingest_file(workspace["id"], str(path), source_class="first_party_project").data["source"]
+            blocked = runtime.create_claim(workspace["id"], "The retry limit is 3 attempts.", source_refs=[document["id"]])
+
+            self.assertFalse(blocked.ok)
+            self.assertIn("document_source_requires_excerpt", blocked.error["message"])
+
+            excerpt = runtime.capture_source_excerpt(
+                workspace["id"],
+                source_ref=document["id"],
+                quote="The retry limit is 3 attempts.",
+                locator="guide.md#retry-policy",
+            )
+            self.assertTrue(excerpt.ok, excerpt.error)
+            excerpt_source = excerpt.data["source"]
+            self.assertEqual(excerpt_source["origin"], {"kind": "source_excerpt", "ref": document["id"]})
+            self.assertEqual(excerpt_source["provenance"]["quote_span"], {"start": 15, "end": 45})
+
+            claim = runtime.create_claim(workspace["id"], "The retry limit is 3 attempts.", source_refs=[excerpt_source["id"]])
+            self.assertTrue(claim.ok, claim.error)
 
     def test_capture_input_creates_inp_and_source_hook_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2242,6 +2270,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("final_answer_preflight", tool_names)
             self.assertIn("task_done_preflight", tool_names)
             self.assertIn("ingest_file", tool_names)
+            self.assertIn("capture_source_excerpt", tool_names)
             self.assertIn("capture_input", tool_names)
             self.assertIn("capture_bash_command", tool_names)
             self.assertIn("capture_run_output_source", tool_names)
@@ -2498,7 +2527,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.17")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.18")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2557,7 +2586,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.17")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.18")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -223,20 +223,20 @@ Required response shape:
         {
           "priority": 10,
           "tool": "mutate_record",
-          "operation_kind": "classify_source",
-          "why": "Source lacks enough classification for trust posture.",
+          "operation_kind": "capture_source_excerpt",
+          "why": "Document facts require exact quote/span evidence.",
           "writes": true,
           "requires_user": false,
-          "expected_output": "SRC-* classification audit event"
+          "expected_output": "excerpt SRC-*"
         },
         {
           "priority": 20,
-          "tool": "mutate_record",
-          "operation_kind": "accept_source",
-          "why": "Source can become commitment-capable under source policy.",
-          "writes": true,
+          "tool": "lookup",
+          "operation_kind": "lookup_facts",
+          "why": "Find corroborating or conflicting claims.",
+          "writes": false,
           "requires_user": false,
-          "expected_output": "source acceptance audit event"
+          "expected_output": "related CLM-* candidates"
         },
         {
           "priority": 30,
@@ -448,20 +448,18 @@ does not make a source commitment-ready.
 Required input includes source classification when known: `input_class`,
 `source_class`, `document_kind`, `evidence_role`, `authority_scope`, and
 `independence_key`. Runtime may fill safe defaults, but an ambiguous source must
-return `source_pressure` and include `classify_source` in valid moves.
+return `source_pressure` and valid moves for supported recovery operations such
+as excerpt capture, lookup, or recapture.
 
-`classify_source`
-: Update classification metadata for a captured `SRC-*`. This is canonical
-provenance metadata, not source truth. Failed classification writes nothing.
+`capture_source_excerpt`
+: Capture an exact quote/span from an existing `SRC-*` as a smaller excerpt
+`SRC-*`. Document-backed CLM creation must cite excerpt sources rather than a
+whole ingested document. If the quote is not found in the parent source, the
+mutation writes nothing.
 
-`accept_source`
-: Runtime operation that marks a captured `SRC-*` accepted under source
-acceptance policy. It records reason, actor, timestamp, policy basis, and a
-source audit event in `records/sources/source_events.jsonl`.
-
-`reject_source`
-: Runtime operation that marks a captured `SRC-*` rejected and appends a source
-audit event.
+`classify_source`, `accept_source`, `reject_source`
+: Deferred source-audit operations. Do not return these operation kinds from v1
+runtime `valid_moves` until the typed tools are implemented.
 
 `create_claim`
 : Create a `CLM-*`. Runtime computes exact `dedup_key` before write. Exact
@@ -481,6 +479,8 @@ explicitly ask the user for a working-assumption confirmation.
 If the requested basis is another under-supported hypothesis, the mutation must
 fail or be converted into valid verification moves; MCP must not create a
 hypothesis-on-hypothesis chain.
+Claims citing whole document sources fail with
+`document_source_requires_excerpt`; capture an exact excerpt first.
 
 `update_claim`
 : Update a `CLM-*`. If the claim is later used in ledger, the ledger snapshots

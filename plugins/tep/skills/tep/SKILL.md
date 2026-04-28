@@ -169,10 +169,17 @@ important instruction, capture it before deriving claims:
 
 - Use `ingest_file` for a local file path.
 - Use `ingest_text` for pasted document content.
+- Use `capture_source_excerpt` to capture the exact quote/span for each
+  document-backed fact before creating a `CLM-*`.
 - Use `capture_input` for user instructions, assumptions, corrections, and
   approvals.
 - Use `capture_bash_command` after running a command.
 - Use `capture_run_output_source` to turn relevant RUN output into SRC evidence.
+
+Do not create CLM facts directly from a whole document source. For uploaded
+documentation, extract one atomic quote into an excerpt `SRC-*`, then create one
+atomic CLM from that excerpt. If no useful facts should be extracted, record
+that as a bounded decision instead of inventing claims.
 
 Secrets are not ignored. TEP may encrypt sensitive payload fields with the host
 key. Only call `decrypt_sensitive_field` when the task genuinely needs the

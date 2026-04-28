@@ -271,10 +271,23 @@ class Runtime:
         def op() -> RuntimeResponse:
             source = self.store.create_source(workspace_ref, **kwargs)
             moves = [
+                move("mutate_record", "capture_source_excerpt", "Capture a precise source excerpt before creating document-backed claims.", writes=True),
                 move("mutate_record", "create_claim", "Create or select a CLM-* from captured source.", writes=True),
                 move("lookup", "lookup_facts", "Check for existing related claims."),
             ]
             source_pressure = []
+            if self.store._source_requires_excerpt(source):
+                source_pressure.append(
+                    {
+                        "level": "high",
+                        "source_refs": [source["id"]],
+                        "why": "document source requires excerpt-based extraction before CLM creation",
+                        "valid_moves": [
+                            move("mutate_record", "capture_source_excerpt", "Capture exact quote/span for one atomic fact.", writes=True),
+                            move("lookup", "lookup_facts", "Check whether the extracted fact already exists."),
+                        ],
+                    }
+                )
             if source.get("critique_status") != "accepted":
                 source_pressure.append(
                     {
@@ -282,12 +295,63 @@ class Runtime:
                         "source_refs": [source["id"]],
                         "why": "source is captured but not accepted for commitment",
                         "valid_moves": [
-                            move("mutate_record", "classify_source", "Improve source classification.", writes=True),
-                            move("mutate_record", "accept_source", "Accept source under policy when valid.", writes=True),
+                            move("mutate_record", "capture_source_excerpt", "Capture precise evidence for document claims.", writes=True),
+                            move("lookup", "lookup_facts", "Check for corroborating or conflicting facts."),
                         ],
                     }
                 )
             return ok_response({"source": source}, source_pressure=source_pressure, valid_moves=moves)
+
+        return self._guard(op)
+
+    def capture_source_excerpt(
+        self,
+        workspace_ref: str,
+        *,
+        source_ref: str,
+        quote: str,
+        locator: str | None = None,
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            parent = self.store.read_source(workspace_ref, source_ref)
+            parent_quote = parent.get("quote")
+            if not isinstance(parent_quote, str):
+                raise ValidationError("source_excerpt_requires_plaintext_parent")
+            if not quote:
+                raise ValidationError("source_excerpt_requires_non_empty_quote")
+            start = parent_quote.find(quote)
+            if start < 0:
+                raise ValidationError("quote_not_found_in_source")
+            end = start + len(quote)
+            classification = dict(parent.get("classification", {}))
+            classification["independence_key"] = f"{source_ref}:{start}:{end}"
+            source = self.store.create_source(
+                workspace_ref,
+                source_kind=parent.get("source_kind", "file_quote"),
+                quote=quote,
+                classification=classification,
+                origin={"kind": "source_excerpt", "ref": source_ref},
+                provenance={
+                    "entity_ref": parent.get("provenance", {}).get("entity_ref") or source_ref,
+                    "activity_ref": "capture_source_excerpt",
+                    "responsible_agent": "runtime",
+                    "content_hash": self.store._captured_text_hash(quote),
+                    "locator": locator or parent.get("provenance", {}).get("locator") or source_ref,
+                    "quote_span": {"start": start, "end": end},
+                    "retrieved_at": parent.get("provenance", {}).get("retrieved_at"),
+                    "published_at": parent.get("provenance", {}).get("published_at"),
+                },
+                project_refs=parent.get("project_refs", []),
+                critique_status=parent.get("critique_status"),
+                reason=f"excerpt captured from {source_ref}",
+            )
+            return ok_response(
+                {"source": source, "parent_source_ref": source_ref},
+                valid_moves=[
+                    move("mutate_record", "create_claim", "Create one atomic CLM-* from this excerpt.", writes=True),
+                    move("lookup", "lookup_facts", "Check for duplicate or related claims."),
+                ],
+            )
 
         return self._guard(op)
 
@@ -953,12 +1017,13 @@ class Runtime:
                             "source_refs": [record_ref],
                             "why": "source is not accepted for commitment",
                             "valid_moves": [
-                                move("mutate_record", "classify_source", "Improve classification.", writes=True),
-                                move("mutate_record", "accept_source", "Accept source under policy.", writes=True),
+                                move("mutate_record", "capture_source_excerpt", "Capture precise document evidence before claim creation.", writes=True),
+                                move("lookup", "lookup_facts", "Find corroborating or conflicting claims."),
                             ],
                         }
                     )
                 valid_moves = [
+                    move("mutate_record", "capture_source_excerpt", "Capture exact quote/span if this is a document source.", writes=True),
                     move("mutate_record", "create_claim", "Create/select a CLM-* from this source.", writes=True),
                     move("lookup", "lookup_facts", "Find claims using related material."),
                 ]

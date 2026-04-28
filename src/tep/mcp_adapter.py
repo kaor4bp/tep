@@ -130,6 +130,10 @@ class MCPAdapter:
                 MCPToolSpec("ingest_file", "source", True, "Ingest a local UTF-8 file as SRC-*.", ("workspace_ref", "path")),
                 self._ingest_file,
             ),
+            "capture_source_excerpt": (
+                MCPToolSpec("capture_source_excerpt", "source", True, "Capture an exact excerpt/span from an existing SRC-*.", ("workspace_ref", "source_ref", "quote"), ("locator",)),
+                self._capture_source_excerpt,
+            ),
             "capture_input": (
                 MCPToolSpec("capture_input", "input", True, "Capture an INP-* event and source.", ("workspace_ref", "text", "input_class")),
                 self._capture_input,
@@ -361,6 +365,11 @@ class MCPAdapter:
         workspace_ref = payload.pop("workspace_ref")
         path = payload.pop("path")
         return self.runtime.ingest_file(workspace_ref, path, **payload)
+
+    def _capture_source_excerpt(self, args: dict[str, Any]) -> RuntimeResponse:
+        payload = dict(args)
+        workspace_ref = payload.pop("workspace_ref")
+        return self.runtime.capture_source_excerpt(workspace_ref, **payload)
 
     def _capture_input(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)

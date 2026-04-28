@@ -819,6 +819,7 @@ class TEPHome:
         tx: FileTransaction | None = None,
     ) -> dict[str, Any]:
         self.ensure_workspace(workspace_ref)
+        self._validate_claim_source_refs(workspace_ref, source_refs or [])
         claim_ref = new_id("CLM")
         dedup_key = canonical_hash(
             {
@@ -869,6 +870,27 @@ class TEPHome:
                 refs={"workspace_ref": workspace_ref, "claim_ref": claim_ref, "invalidated_context_refs": [pack["id"] for pack in affected]},
             )
         return record
+
+    def _validate_claim_source_refs(self, workspace_ref: str, source_refs: list[str]) -> None:
+        for source_ref in source_refs:
+            source = self.read_source(workspace_ref, source_ref)
+            if self._source_requires_excerpt(source):
+                raise ValidationError(f"document_source_requires_excerpt:{source_ref}")
+
+    @staticmethod
+    def _source_requires_excerpt(source: dict[str, Any]) -> bool:
+        if source.get("source_kind") != "file_quote":
+            return False
+        if source.get("origin", {}).get("kind") != "file":
+            return False
+        document_kind = source.get("classification", {}).get("document_kind")
+        if document_kind not in {"markdown", "text", "manual", "spec", "api_reference", "paper"}:
+            return False
+        quote = source.get("quote")
+        if not isinstance(quote, str):
+            return False
+        span = source.get("provenance", {}).get("quote_span")
+        return span == {"start": 0, "end": len(quote)}
 
     def create_relation_claim(
         self,
