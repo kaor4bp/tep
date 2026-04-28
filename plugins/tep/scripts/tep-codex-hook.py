@@ -749,6 +749,12 @@ def handle_post_bash(payload: dict) -> int:
                     event="PostToolUse",
                 )
             else:
+                if classify_bash(command) == "evidence_producing":
+                    emit_context(
+                        f"Captured RUN/SRC for evidence-producing command as {run['id']}. Extract quote-backed facts with extract_run_claim_candidates, then create atomic CLM-* with create_claim_from_evidence. Ask: what did this test output teach about system behavior, contracts, failure modes, or constraints?",
+                        event="PostToolUse",
+                    )
+                    return 0
                 emit_context(
                     "Captured RUN/SRC only. Do not create a mechanical command CLM; create CLM-* only if you learned a system fact from this observation.",
                     event="PostToolUse",

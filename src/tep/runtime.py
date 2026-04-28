@@ -425,8 +425,8 @@ class Runtime:
                 raise ValidationError("create_claim_from_evidence_requires_evidence_refs")
             for source_ref in evidence_refs:
                 source = self.store.read_source(workspace_ref, source_ref)
-                if source.get("origin", {}).get("kind") != "source_excerpt":
-                    raise ValidationError(f"claim_evidence_requires_excerpt:{source_ref}")
+                if source.get("origin", {}).get("kind") != "source_excerpt" and source.get("source_kind") != "command_output":
+                    raise ValidationError(f"claim_evidence_requires_excerpt_or_command_output:{source_ref}")
             candidate_pressure = self._claim_analysis_pressure({"id": "CLM-candidate", "statement": statement, "relation": None})
             if candidate_pressure:
                 raise ValidationError("claim_from_evidence_not_atomic")
@@ -601,42 +601,7 @@ class Runtime:
         quote: str | None = None,
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
-            run = self.store.read_run(workspace_ref, run_ref)
-            if stream not in {"stdout", "stderr"}:
-                raise ValidationError("stream must be stdout or stderr")
-            output = run.get(stream, "")
-            if isinstance(output, dict) and output.get("encrypted") is True:
-                output = decrypt_text(self.store.root, output)
-            selected = output if quote is None else quote
-            if selected and selected not in output:
-                raise ValidationError("quote_not_found_in_run_output")
-            stored_quote = maybe_encrypt_text(self.store.root, selected)
-            source = self.store.create_source(
-                workspace_ref,
-                source_kind="command_output",
-                quote=stored_quote,
-                classification={
-                    "input_class": "secret_or_credential" if not isinstance(stored_quote, str) else None,
-                    "source_class": "runtime_observation",
-                    "document_kind": "command_output",
-                    "evidence_role": "observation",
-                    "authority_scope": "local_runtime",
-                    "independence_key": f"run:{run_ref}",
-                },
-                origin={"kind": "command", "ref": run_ref},
-                provenance={
-                    "entity_ref": run_ref,
-                    "activity_ref": run_ref,
-                    "responsible_agent": run.get("agent_ref") or "runtime",
-                    "content_hash": run.get(f"{stream}_hash") if quote is None else self.store._captured_text_hash(stored_quote),
-                    "locator": f"{run_ref}:{stream}",
-                    "quote_span": None,
-                    "retrieved_at": None,
-                    "published_at": None,
-                },
-                critique_status="audited",
-                reason="RUN output captured as source",
-            )
+            source, run = self._capture_run_output_source(workspace_ref, run_ref=run_ref, stream=stream, quote=quote)
             return ok_response(
                 {"source": source, "run": run},
                 source_pressure=[
@@ -657,6 +622,131 @@ class Runtime:
             )
 
         return self._guard(op)
+
+    def extract_run_claim_candidates(
+        self,
+        workspace_ref: str,
+        *,
+        run_ref: str,
+        candidates: list[dict[str, Any]],
+    ) -> RuntimeResponse:
+        def op() -> RuntimeResponse:
+            if not candidates:
+                raise ValidationError("extract_run_claim_candidates_requires_candidates")
+            run = self.store.read_run(workspace_ref, run_ref)
+            prepared = []
+            for index, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    raise ValidationError(f"run_claim_candidate_invalid:{index}")
+                stream = str(candidate.get("stream") or "stdout")
+                if stream not in {"stdout", "stderr"}:
+                    raise ValidationError(f"run_claim_candidate_stream_invalid:{index}")
+                output = run.get(stream, "")
+                if isinstance(output, dict) and output.get("encrypted") is True:
+                    output = decrypt_text(self.store.root, output)
+                quote = str(candidate.get("quote") or "").strip()
+                statement = str(candidate.get("statement") or "").strip()
+                if not quote:
+                    raise ValidationError(f"run_claim_candidate_quote_required:{index}")
+                if not statement:
+                    raise ValidationError(f"run_claim_candidate_statement_required:{index}")
+                if quote not in output:
+                    raise ValidationError(f"quote_not_found_in_run_output:{index}")
+                prepared.append(
+                    {
+                        "index": index,
+                        "stream": stream,
+                        "quote": quote,
+                        "statement": statement,
+                        "claim_kind": str(candidate.get("claim_kind") or "runtime_observation"),
+                        "why_this_follows": str(candidate.get("why_this_follows") or ""),
+                    }
+                )
+            extracted = []
+            for candidate in prepared:
+                source, _run = self._capture_run_output_source(
+                    workspace_ref,
+                    run_ref=run_ref,
+                    stream=candidate["stream"],
+                    quote=candidate["quote"],
+                )
+                extracted.append(
+                    {
+                        "index": candidate["index"],
+                        "run_ref": run_ref,
+                        "stream": candidate["stream"],
+                        "evidence_source_ref": source["id"],
+                        "statement": candidate["statement"],
+                        "claim_kind": candidate["claim_kind"],
+                        "why_this_follows": candidate["why_this_follows"],
+                    }
+                )
+            return ok_response(
+                {"claim_candidates": extracted, "run": run},
+                source_pressure=[
+                    {
+                        "level": "medium",
+                        "source_refs": [candidate["evidence_source_ref"] for candidate in extracted],
+                        "why": "RUN evidence candidates are captured but not yet committed as CLM-* facts",
+                        "valid_moves": [
+                            move("mutate_record", "create_claim_from_evidence", "Create one atomic CLM-* per useful RUN observation.", writes=True),
+                            move("mutate_record", "link_claims", "Relate runtime observations to system behavior claims.", writes=True),
+                        ],
+                    }
+                ],
+                valid_moves=[
+                    move("mutate_record", "create_claim_from_evidence", "Create one atomic CLM-* from captured RUN evidence.", writes=True),
+                    move("mutate_record", "link_claims", "Connect observation to existing system facts or hypotheses.", writes=True),
+                ],
+            )
+
+        return self._guard(op)
+
+    def _capture_run_output_source(
+        self,
+        workspace_ref: str,
+        *,
+        run_ref: str,
+        stream: str = "stdout",
+        quote: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        run = self.store.read_run(workspace_ref, run_ref)
+        if stream not in {"stdout", "stderr"}:
+            raise ValidationError("stream must be stdout or stderr")
+        output = run.get(stream, "")
+        if isinstance(output, dict) and output.get("encrypted") is True:
+            output = decrypt_text(self.store.root, output)
+        selected = output if quote is None else quote
+        if selected and selected not in output:
+            raise ValidationError("quote_not_found_in_run_output")
+        stored_quote = maybe_encrypt_text(self.store.root, selected)
+        source = self.store.create_source(
+            workspace_ref,
+            source_kind="command_output",
+            quote=stored_quote,
+            classification={
+                "input_class": "secret_or_credential" if not isinstance(stored_quote, str) else None,
+                "source_class": "runtime_observation",
+                "document_kind": "command_output",
+                "evidence_role": "observation",
+                "authority_scope": "local_runtime",
+                "independence_key": f"run:{run_ref}:{stream}",
+            },
+            origin={"kind": "command", "ref": run_ref},
+            provenance={
+                "entity_ref": run_ref,
+                "activity_ref": run_ref,
+                "responsible_agent": run.get("agent_ref") or "runtime",
+                "content_hash": run.get(f"{stream}_hash") if quote is None else self.store._captured_text_hash(stored_quote),
+                "locator": f"{run_ref}:{stream}",
+                "quote_span": None,
+                "retrieved_at": None,
+                "published_at": None,
+            },
+            critique_status="audited",
+            reason="RUN output captured as source",
+        )
+        return source, run
 
     def decrypt_sensitive_field(self, workspace_ref: str, record_ref: str, field: str) -> RuntimeResponse:
         def op() -> RuntimeResponse:

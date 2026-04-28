@@ -182,6 +182,9 @@ important instruction, capture it before deriving claims:
   approvals.
 - Use `capture_bash_command` after running a command.
 - Use `capture_run_output_source` to turn relevant RUN output into SRC evidence.
+- Use `extract_run_claim_candidates` after tests or other evidence-producing
+  commands when the output taught you something: propose exact output quotes
+  plus atomic statements, then call `create_claim_from_evidence`.
 
 Do not create CLM facts directly from a whole document source. For uploaded
 documentation, extract one atomic quote into an excerpt `SRC-*`, then create one
@@ -189,6 +192,11 @@ atomic CLM from that excerpt. Prefer the short path:
 `ingest_file -> extract_claim_candidates -> create_claim_from_evidence`. If no
 useful facts should be extracted, record that as a bounded decision instead of
 inventing claims.
+
+For test and command evidence, do not stop at “pytest ran” or “command exited”.
+Use `extract_run_claim_candidates` for exact stdout/stderr quotes that reveal a
+system fact, then commit one narrow CLM per useful observation. If the output is
+only a smoke result and teaches nothing durable, leave it as `RUN-*`/`SRC-*`.
 
 Secrets are not ignored. TEP may encrypt sensitive payload fields with the host
 key. Only call `decrypt_sensitive_field` when the task genuinely needs the

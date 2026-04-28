@@ -1748,7 +1748,7 @@ class CoreTests(unittest.TestCase):
                 evidence_refs=[document["id"]],
             )
             self.assertFalse(whole_document.ok)
-            self.assertIn("claim_evidence_requires_excerpt", whole_document.error["message"])
+            self.assertIn("claim_evidence_requires_excerpt_or_command_output", whole_document.error["message"])
 
             excerpt = runtime.capture_source_excerpt(
                 workspace["id"],
@@ -1917,6 +1917,40 @@ class CoreTests(unittest.TestCase):
             sources = sorted((tep_home / "records" / "sources").glob("**/SRC-*.json"))
             self.assertEqual(len(sources), 1)
             self.assertIn("Captured RUN/SRC only", completed.stdout)
+
+    def test_codex_hook_pushes_run_extraction_after_evidence_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_WORKSPACE_REF", None)
+            env["TEP_REPO_ROOT"] = str(Path(__file__).resolve().parents[1])
+            payload = {
+                "cwd": str(project_root),
+                "tool_input": {"command": "pytest -q"},
+                "tool_response": {"exit_code": 0, "stdout": "1 passed\n"},
+            }
+
+            completed = subprocess.run(
+                [sys.executable, str(script), "post-bash"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("extract_run_claim_candidates", completed.stdout)
+            self.assertIn("what did this test output teach", completed.stdout)
 
     def test_codex_hook_resolves_latest_workspace_when_project_has_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2270,6 +2304,62 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(bad_quote.ok)
             self.assertIn("quote_not_found_in_run_output", bad_quote.error["message"])
 
+    def test_extract_run_claim_candidates_and_create_claim_from_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            run = runtime.capture_bash_command(
+                workspace["id"],
+                command="pytest tests/test_api.py -q",
+                cwd=tmp,
+                exit_code=1,
+                stdout="FAILED tests/test_api.py::test_returns_200 - AssertionError: 500 != 200\n",
+            ).data["run"]
+
+            source_count_before_failed_extract = len(list(Path(tmp).rglob("SRC-*.json")))
+            failed = runtime.extract_run_claim_candidates(
+                workspace["id"],
+                run_ref=run["id"],
+                candidates=[
+                    {
+                        "stream": "stdout",
+                        "quote": "FAILED tests/test_api.py::test_returns_200 - AssertionError: 500 != 200",
+                        "statement": "API test observes a 500 response where 200 is expected.",
+                    },
+                    {"stream": "stdout", "quote": "missing", "statement": "Missing quote should not write a partial source."},
+                ],
+            )
+            self.assertFalse(failed.ok)
+            self.assertIn("quote_not_found_in_run_output:1", failed.error["message"])
+            self.assertEqual(len(list(Path(tmp).rglob("SRC-*.json"))), source_count_before_failed_extract)
+
+            candidates = runtime.extract_run_claim_candidates(
+                workspace["id"],
+                run_ref=run["id"],
+                candidates=[
+                    {
+                        "stream": "stdout",
+                        "quote": "FAILED tests/test_api.py::test_returns_200 - AssertionError: 500 != 200",
+                        "statement": "API test observes a 500 response where 200 is expected.",
+                        "claim_kind": "runtime_observation",
+                        "why_this_follows": "The pytest failure line reports the actual and expected status codes.",
+                    }
+                ],
+            )
+            self.assertTrue(candidates.ok, candidates.error)
+            candidate = candidates.data["claim_candidates"][0]
+            self.assertIn("create_claim_from_evidence", {move["operation_kind"] for move in candidates.valid_moves})
+
+            claim = runtime.create_claim_from_evidence(
+                workspace["id"],
+                statement=candidate["statement"],
+                evidence_refs=[candidate["evidence_source_ref"]],
+                claim_kind=candidate["claim_kind"],
+            )
+            self.assertTrue(claim.ok, claim.error)
+            self.assertEqual(claim.data["claim"]["source_refs"], [candidate["evidence_source_ref"]])
+
     def test_secret_bash_output_is_encrypted_and_can_be_captured_as_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2355,6 +2445,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("capture_input", tool_names)
             self.assertIn("capture_bash_command", tool_names)
             self.assertIn("capture_run_output_source", tool_names)
+            self.assertIn("extract_run_claim_candidates", tool_names)
             self.assertIn("decrypt_sensitive_field", tool_names)
             self.assertIn("read_settings", tool_names)
             self.assertIn("update_settings", tool_names)
@@ -2608,7 +2699,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.19")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.20")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -2667,7 +2758,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.19")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.20")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

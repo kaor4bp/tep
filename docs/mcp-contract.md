@@ -576,6 +576,14 @@ expiry. The open ACT must still be fresh under
 : Record a `RUN-*` for an executed command/tool/action. It must link to the
 current ACT or action token for protected work.
 
+`extract_run_claim_candidates`
+: Validate agent-proposed facts from `RUN-*` stdout/stderr. Input candidates
+contain `stream`, exact `quote`, and atomic `statement`. Runtime verifies each
+quote exists in the selected output stream, captures audited `SRC-*` command
+evidence, and returns candidate packages for `create_claim_from_evidence`.
+This keeps test-driven learning from collapsing into mechanical “command ran”
+claims.
+
 `capture_probe_result`
 : Convert RUN/user/file/artifact evidence into `SRC-*` for the open probe.
 If it appends a ledger `capture` row, it requires the explicit in-memory signing

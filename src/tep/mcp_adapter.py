@@ -150,6 +150,10 @@ class MCPAdapter:
                 MCPToolSpec("capture_run_output_source", "source", True, "Capture RUN-* output excerpt as audited SRC-*.", ("workspace_ref", "run_ref")),
                 self._capture_run_output_source,
             ),
+            "extract_run_claim_candidates": (
+                MCPToolSpec("extract_run_claim_candidates", "run", True, "Validate quote-backed claim candidates from RUN-* output and capture SRC-* evidence.", ("workspace_ref", "run_ref", "candidates")),
+                self._extract_run_claim_candidates,
+            ),
             "decrypt_sensitive_field": (
                 MCPToolSpec("decrypt_sensitive_field", "secret", False, "Decrypt an encrypted top-level record field with the host key.", ("workspace_ref", "record_ref", "field")),
                 self._decrypt_sensitive_field,
@@ -405,6 +409,11 @@ class MCPAdapter:
         payload = dict(args)
         workspace_ref = payload.pop("workspace_ref")
         return self.runtime.capture_run_output_source(workspace_ref, **payload)
+
+    def _extract_run_claim_candidates(self, args: dict[str, Any]) -> RuntimeResponse:
+        payload = dict(args)
+        workspace_ref = payload.pop("workspace_ref")
+        return self.runtime.extract_run_claim_candidates(workspace_ref, **payload)
 
     def _decrypt_sensitive_field(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.decrypt_sensitive_field(args["workspace_ref"], args["record_ref"], args["field"])
