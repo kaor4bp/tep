@@ -2996,7 +2996,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.26")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.27")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3055,7 +3055,25 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.26")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.27")
+
+    def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
+        script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
+        message = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
+        env = dict(os.environ)
+        env["TEP_PYTHON"] = "/bin/false"
+        completed = subprocess.run(
+            [str(script)],
+            input=message + "\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        response = json.loads(completed.stdout)
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.27")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
