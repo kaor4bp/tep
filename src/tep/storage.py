@@ -73,6 +73,7 @@ class TEPHome:
             workspace / "records" / "run",
             workspace / "tasks",
             workspace / "agents",
+            workspace / "runtime",
             workspace / "artifacts" / "context_packs",
         ]:
             path.mkdir(parents=True, exist_ok=True)
@@ -398,6 +399,23 @@ class TEPHome:
             if agent.get("thread_ref") == thread_ref:
                 return agent
         return None
+
+    def set_current_agent(self, workspace_ref: str, agent_ref: str, *, thread_ref: str) -> dict[str, Any]:
+        self.read_agent(workspace_ref, agent_ref)
+        record = {
+            "workspace_ref": workspace_ref,
+            "agent_ref": agent_ref,
+            "thread_ref": thread_ref,
+            "updated_at": utc_now(),
+        }
+        self._write_json(self.workspace_dir(workspace_ref) / "runtime" / "current_agent.json", record)
+        return record
+
+    def current_agent(self, workspace_ref: str) -> dict[str, Any] | None:
+        path = self.workspace_dir(workspace_ref) / "runtime" / "current_agent.json"
+        if not path.exists():
+            return None
+        return read_json(path)
 
     def create_input(
         self,

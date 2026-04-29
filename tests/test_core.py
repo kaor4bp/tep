@@ -85,6 +85,21 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(brief.data["agent"]["inferred_from_workspace"])
             self.assertEqual(brief.ledger_pressure["current_agent"], agent["id"])
 
+    def test_start_agent_thread_writes_current_agent_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            first = generate_agent_identity("first-agent")
+            second = generate_agent_identity("second-agent")
+            runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=first)
+            runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-2", identity=second)
+
+            marker = runtime.store.current_agent(workspace["id"])
+
+            self.assertIsNotNone(marker)
+            self.assertEqual(marker["agent_ref"], second.agent_ref)
+            self.assertEqual(marker["thread_ref"], "thread-2")
+
     def test_settings_merge_and_action_pressure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2500,6 +2515,78 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
             self.assertIn("ACT-bound", output["hookSpecificOutput"]["additionalContext"])
 
+    def test_codex_hook_prefers_current_agent_marker_without_agent_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            runtime = Runtime(store)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            store.update_settings({"enforcement": {"mode": "strict", "bash_policy": "act_for_all"}}, workspace_ref=workspace["id"])
+            first_identity = generate_agent_identity("old-agent")
+            first_agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-old", identity=first_identity).data["agent"]
+            first_claim = runtime.create_claim(workspace["id"], "Old agent has an open ACT.").data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=first_agent["id"],
+                private_key=first_identity.private_key,
+                claim_ref=first_claim["id"],
+                why="Snapshot old ACT.",
+                difficulty_bits=8,
+            )
+            runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=first_agent["id"],
+                private_key=first_identity.private_key,
+                claim_ref=first_claim["id"],
+                intent="Keep old ACT open.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            current_identity = generate_agent_identity("current-agent")
+            current_agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-current", identity=current_identity).data["agent"]
+            current_claim = runtime.create_claim(workspace["id"], "Current agent has an open ACT.").data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=current_agent["id"],
+                private_key=current_identity.private_key,
+                claim_ref=current_claim["id"],
+                why="Snapshot current ACT.",
+                difficulty_bits=8,
+            )
+            runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=current_agent["id"],
+                private_key=current_identity.private_key,
+                claim_ref=current_claim["id"],
+                intent="Allow current hook command.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_AGENT_REF", None)
+            completed = subprocess.run(
+                [sys.executable, str(script), "pre-bash"],
+                input=json.dumps({"cwd": str(project_root), "tool_input": {"command": "python -c 'print(1)'"}},),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
+            self.assertIn("ACT-bound", output["hookSpecificOutput"]["additionalContext"])
+
     def test_secret_input_is_encrypted_not_redacted_or_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2996,7 +3083,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.27")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.28")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3055,7 +3142,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.27")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.28")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3073,7 +3160,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.27")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.28")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -59,10 +59,12 @@ class Runtime:
             if existing is not None:
                 if existing.get("key_fingerprint") != identity.key_fingerprint:
                     raise OwnershipError("thread_ref is already bound to a different key fingerprint")
+                self.store.set_current_agent(workspace_ref, existing["id"], thread_ref=thread_ref)
                 return ok_response({"agent": existing}, valid_moves=[move("brief", "brief_current_context", "Load current task and ledger posture.")])
             if not allow_create:
                 raise ValidationError("agent_not_found")
             agent = self.store.create_agent(workspace_ref, identity, thread_ref=thread_ref)
+            self.store.set_current_agent(workspace_ref, agent["id"], thread_ref=thread_ref)
             return ok_response({"agent": agent}, valid_moves=[move("brief", "brief_current_context", "Load initial task and ledger posture.")])
 
         return self._guard(op)

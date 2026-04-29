@@ -246,7 +246,7 @@ def open_act_ref(pointer: dict, workspace: str | None, settings: dict[str, Any] 
     explicit = os.environ.get("TEP_OPEN_ACT_REF")
     if explicit and explicit.startswith("L-"):
         return explicit
-    agent_ref = os.environ.get("TEP_AGENT_REF")
+    agent_ref = current_agent_ref(pointer, workspace)
     if not workspace:
         return None
     home = tep_home(pointer)
@@ -260,6 +260,19 @@ def open_act_ref(pointer: dict, workspace: str | None, settings: dict[str, Any] 
             open_refs.append(open_ref)
     unique = sorted(set(open_refs))
     return unique[0] if len(unique) == 1 else None
+
+
+def current_agent_ref(pointer: dict, workspace: str | None) -> str | None:
+    explicit = os.environ.get("TEP_AGENT_REF")
+    if explicit and explicit.startswith("AGENT-"):
+        return explicit
+    if not workspace:
+        return None
+    marker = read_json(tep_home(pointer) / "workspaces" / workspace / "runtime" / "current_agent.json")
+    agent_ref = marker.get("agent_ref")
+    if isinstance(agent_ref, str) and agent_ref.startswith("AGENT-"):
+        return agent_ref
+    return None
 
 
 def open_act_in_ledger(ledger_path: Path, *, timeout_seconds: int = 300) -> str | None:
@@ -288,7 +301,7 @@ def active_task_ref(pointer: dict, workspace: str | None) -> str | None:
     explicit = os.environ.get("TEP_TASK_REF")
     if explicit and explicit.startswith("TASK-"):
         return explicit
-    agent_ref = os.environ.get("TEP_AGENT_REF")
+    agent_ref = current_agent_ref(pointer, workspace)
     if not workspace:
         return None
     home = tep_home(pointer)
