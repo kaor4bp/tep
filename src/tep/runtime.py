@@ -708,6 +708,7 @@ class Runtime:
         stdout: str = "",
         stderr: str = "",
         agent_ref: str | None = None,
+        open_act_ref: str | None = None,
         preflight_run_ref: str | None = None,
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
@@ -721,6 +722,7 @@ class Runtime:
                 stdout=stored_stdout,
                 stderr=stored_stderr,
                 agent_ref=agent_ref,
+                open_act_ref=open_act_ref,
                 preflight_run_ref=preflight_run_ref,
             )
             return ok_response(
@@ -1413,6 +1415,7 @@ class Runtime:
             if agent:
                 for refs in agent["working_context"].get("selected_claim_refs_by_task", {}).values():
                     selected_claim_refs.extend(refs)
+            working_argument = self._working_argument(workspace_ref, resolved_agent_ref, active_task, selected_claim_refs)
             return ok_response(
                 {
                     "workspace": {"ref": workspace_ref, "name": workspace.get("name")},
@@ -1436,6 +1439,7 @@ class Runtime:
                         "open_act": self._ledger_pressure(workspace_ref, resolved_agent_ref)["open_act"] if resolved_agent_ref else None,
                         "selected_claim_refs": selected_claim_refs,
                     },
+                    "working_argument": working_argument,
                     "facts": facts,
                 },
                 ledger_pressure=self._ledger_pressure(workspace_ref, resolved_agent_ref),
@@ -1565,6 +1569,25 @@ class Runtime:
         if not statement.strip() or claim.get("relation"):
             return []
         normalized = " ".join(statement.split())
+        pressure: list[dict[str, Any]] = []
+        if self._is_bookkeeping_claim(claim):
+            pressure.append(
+                {
+                    "level": "medium",
+                    "claim_refs": [claim["id"]],
+                    "why": "claim reads like execution bookkeeping, not durable system knowledge",
+                    "questions": [
+                        "What did this observation teach about code behavior, test contract, environment, or task outcome?",
+                        "Should this remain RUN/SRC evidence instead of becoming a central CLM-*?",
+                        "Which existing CLM-* does this observation support or challenge?",
+                    ],
+                    "valid_moves": [
+                        move("detail", "record_detail", "Inspect the RUN/SRC evidence behind this observation."),
+                        move("mutate_record", "create_claim", "Create a separate durable system-behavior CLM-* if something was learned.", writes=True),
+                        move("mutate_record", "link_claims", "Link the observation as support/challenge instead of treating it as the argument root.", writes=True),
+                    ],
+                }
+            )
         words = normalized.split()
         sentence_count = sum(1 for part in re.split(r"[.!?]+(?=\s|$)", normalized) if part.strip())
         separators = normalized.count(";") + normalized.count(":") + normalized.count(",")
@@ -1583,8 +1606,8 @@ class Runtime:
         )
         heavy = len(words) >= 24 or sentence_count > 1 or separators >= 3 or connectors >= 2
         if not heavy:
-            return []
-        return [
+            return pressure
+        pressure.append(
             {
                 "level": "medium",
                 "claim_refs": [claim["id"]],
@@ -1600,7 +1623,91 @@ class Runtime:
                     move("lookup", "lookup_facts", "Check whether atomic parts already exist."),
                 ],
             }
+        )
+        return pressure
+
+    @staticmethod
+    def _is_bookkeeping_claim(claim: dict[str, Any]) -> bool:
+        statement = " ".join(str(claim.get("statement") or "").casefold().split())
+        if not statement:
+            return False
+        patterns = [
+            r"\bcommit\s+[0-9a-f]{7,40}\b.*\bgit status\b.*\bclean\b",
+            r"\bgit status\b.*\bclean\b",
+            r"\bcommand\b.*\b(exit|exited|completed)\b.*\b(code|0|1|2)\b",
+            r"\bpytest command\b.*\bcompleted\b.*\bexit code\b",
+            r"\btests?\b.*\bcollected\b.*\bexit code\b",
+            r"\bcreated\b.*\band\b.*\bclean\b",
         ]
+        return any(re.search(pattern, statement) for pattern in patterns)
+
+    def _working_argument(
+        self,
+        workspace_ref: str,
+        agent_ref: str | None,
+        active_task: dict[str, Any] | None,
+        selected_claim_refs: list[str],
+    ) -> dict[str, Any]:
+        chain: list[dict[str, Any]] = []
+        evidence_leaves: list[str] = []
+        bookkeeping_refs: list[str] = []
+        gaps: list[dict[str, Any]] = []
+        if agent_ref:
+            for row in self.store.read_jsonl(self.store.ledger_path(workspace_ref, agent_ref))[-12:]:
+                ref = row.get("ref")
+                if not isinstance(ref, str) or not ref.startswith("CLM-"):
+                    continue
+                try:
+                    claim = self.store.read_claim(workspace_ref, ref)
+                except Exception:
+                    continue
+                source_refs = claim.get("source_refs", [])
+                evidence_leaves.extend(source_ref for source_ref in source_refs if isinstance(source_ref, str))
+                if self._is_bookkeeping_claim(claim):
+                    bookkeeping_refs.append(ref)
+                chain.append(
+                    {
+                        "ledger_row": row.get("id"),
+                        "kind": row.get("kind"),
+                        "claim_ref": ref,
+                        "statement": claim.get("statement"),
+                        "source_refs": source_refs,
+                        "trust_posture": self.posture.trust_posture(workspace_ref, claim),
+                    }
+                )
+        if active_task is None:
+            gaps.append({"code": "no_active_task", "why": "briefing has no active task, so the current argument has no task goal"})
+        if not chain:
+            gaps.append({"code": "no_ledger_claim_chain", "why": "current agent ledger has no recent CLM-* chain"})
+        unsupported = [item["claim_ref"] for item in chain if not item.get("source_refs")]
+        if unsupported:
+            gaps.append({"code": "unsupported_claims_in_chain", "claim_refs": unsupported[:8], "why": "some chain claims have no evidence leaves"})
+        if bookkeeping_refs:
+            gaps.append(
+                {
+                    "code": "bookkeeping_claims_in_chain",
+                    "claim_refs": bookkeeping_refs[:8],
+                    "why": "some chain claims describe command/commit bookkeeping; use them as evidence, not as the main system argument",
+                }
+            )
+        if selected_claim_refs:
+            chain_refs = {item["claim_ref"] for item in chain}
+            selected_missing = [ref for ref in selected_claim_refs if ref not in chain_refs]
+            if selected_missing:
+                gaps.append({"code": "selected_claims_not_in_recent_ledger", "claim_refs": selected_missing[:8], "why": "selected claims are not visible in the recent ledger chain"})
+        return {
+            "current_question": active_task.get("goal") if active_task else None,
+            "claim_chain": chain[-8:],
+            "evidence_leaves": sorted(set(evidence_leaves))[:12],
+            "bookkeeping_claim_refs": bookkeeping_refs[:8],
+            "gaps": gaps,
+            "reflection_prompt": "Are you still working on this fact chain? If not, update the chain before acting; if yes, explain how the next action will change one CLM-* or close one gap.",
+            "valid_moves": [
+                move("lookup", "lookup_facts", "Find CLM-* that should be part of the current argument."),
+                move("detail", "record_detail", "Inspect a CLM-* or SRC-* in the current argument."),
+                move("mutate_record", "link_claims", "Connect observations to system facts with explicit relations.", writes=True),
+            ],
+        }
 
     def _read_record(self, workspace_ref: str, record_ref: str) -> dict[str, Any]:
         if record_ref.startswith("CLM-"):

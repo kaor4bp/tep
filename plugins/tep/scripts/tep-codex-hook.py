@@ -217,6 +217,9 @@ def resolve_workspace_ref(pointer: dict, cwd: str | None) -> str | None:
     if value:
         return value
     home = tep_home(pointer)
+    pointer_workspace = pointer.get("workspace_ref")
+    if isinstance(pointer_workspace, str) and (home / "registry" / "workspaces" / f"{pointer_workspace}.json").exists():
+        return pointer_workspace
     project_ref = pointer.get("project_ref")
     if not isinstance(project_ref, str) or not (home / "registry" / "projects" / f"{project_ref}.json").exists():
         project_ref = project_ref_from_root(home, cwd)
@@ -511,6 +514,17 @@ def command_text(payload: dict) -> str:
     return ""
 
 
+def action_cwd(payload: dict) -> str | None:
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, dict):
+        for key in ("workdir", "cwd"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    value = payload.get("cwd")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def exit_code(payload: dict) -> int | None:
     for container_name in ("tool_response", "result", "response"):
         container = payload.get(container_name)
@@ -632,7 +646,8 @@ def workspace_ref() -> str | None:
 
 
 def handle_session_start(payload: dict) -> int:
-    pointer_path, pointer = find_pointer(payload.get("cwd"))
+    cwd = action_cwd(payload)
+    pointer_path, pointer = find_pointer(cwd)
     if pointer_path is None:
         emit_context("No local .tep pointer found. Run tep-init before relying on TEP hooks.", event="SessionStart")
         return 0
@@ -640,7 +655,7 @@ def handle_session_start(payload: dict) -> int:
         "TEP hooks visible. Start by generating/continuing in-memory agent identity, "
         "then call brief_current_context. During the task, record durable system facts as CLM-* when observations change your understanding."
     )
-    wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
+    wsp = resolve_workspace_ref(pointer, cwd)
     if wsp is None:
         message += " No unique WSP-* resolved from .tep project membership; run tep-init or attach the project to one workspace."
     else:
@@ -652,8 +667,9 @@ def handle_session_start(payload: dict) -> int:
 
 
 def handle_user_prompt(payload: dict) -> int:
-    _pointer_path, pointer = find_pointer(payload.get("cwd"))
-    wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
+    cwd = action_cwd(payload)
+    _pointer_path, pointer = find_pointer(cwd)
+    wsp = resolve_workspace_ref(pointer, cwd)
     text = prompt_text(payload)
     if pointer and wsp and text:
         call_tep(pointer, "capture_input", {"workspace_ref": wsp, "text": text, "input_class": "instruction"})
@@ -665,10 +681,11 @@ def handle_pre_bash(payload: dict) -> int:
     if command and DIRECT_TEP_WRITE.search(command):
         emit_deny("Direct writes to .tep storage are blocked; use typed TEP tools.")
         return 0
-    pointer_path, pointer = find_pointer(payload.get("cwd"))
+    cwd = action_cwd(payload)
+    pointer_path, pointer = find_pointer(cwd)
     if pointer_path is None or not command:
         return 0
-    wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
+    wsp = resolve_workspace_ref(pointer, cwd)
     settings = read_settings_for(pointer, wsp)
     missing_context = missing_task_context(pointer, wsp, active_task_ref(pointer, wsp), settings)
     if missing_context:
@@ -696,23 +713,29 @@ def handle_pre_bash(payload: dict) -> int:
 
 
 def handle_post_bash(payload: dict) -> int:
-    _pointer_path, pointer = find_pointer(payload.get("cwd"))
-    wsp = resolve_workspace_ref(pointer, payload.get("cwd"))
+    cwd = action_cwd(payload)
+    _pointer_path, pointer = find_pointer(cwd)
+    wsp = resolve_workspace_ref(pointer, cwd)
     command = command_text(payload)
     code = exit_code(payload)
     if pointer and wsp and command and code is not None:
         stdout = response_text(payload, "stdout")
         stderr = response_text(payload, "stderr")
+        settings = read_settings_for(pointer, wsp)
+        agent_ref = current_agent_ref(pointer, wsp)
+        act_ref = open_act_ref(pointer, wsp, settings)
         captured = call_tep(
             pointer,
             "capture_bash_command",
             {
                 "workspace_ref": wsp,
                 "command": command,
-                "cwd": str(payload.get("cwd") or ""),
+                "cwd": str(cwd or ""),
                 "exit_code": code,
                 "stdout": stdout,
                 "stderr": stderr,
+                "agent_ref": agent_ref,
+                "open_act_ref": act_ref,
             },
         )
         run = captured.get("data", {}).get("run") if isinstance(captured, dict) and captured.get("ok") else None
@@ -775,18 +798,18 @@ def handle_post_bash(payload: dict) -> int:
                     created_claims += 1
             if created_claims:
                 emit_context(
-                    f"Captured RUN/SRC and {created_claims} narrow observation CLM. If this changes your model of the system, create separate system-behavior CLM-* facts and link them to the observation.",
+                    f"Captured RUN/SRC and {created_claims} narrow observation CLM. Refresh brief_current_context and check working_argument: if this changes your model of the system, create separate system-behavior CLM-* facts and link them to the observation.",
                     event="PostToolUse",
                 )
             else:
                 if classify_bash(command) == "evidence_producing":
                     emit_context(
-                        f"Captured RUN/SRC for evidence-producing command as {run['id']}. Extract quote-backed facts with extract_run_claim_candidates, then create atomic CLM-* with create_claim_from_evidence. Ask: what did this test output teach about system behavior, contracts, failure modes, or constraints?",
+                        f"Captured RUN/SRC for evidence-producing command as {run['id']}. Refresh brief_current_context and compare the output with working_argument. Extract quote-backed facts with extract_run_claim_candidates only if this taught code behavior, test contract, environment constraint, task outcome, or changed a CLM-* gap.",
                         event="PostToolUse",
                     )
                     return 0
                 emit_context(
-                    "Captured RUN/SRC only. Do not create a mechanical command CLM; create CLM-* only if you learned a system fact from this observation.",
+                    "Captured RUN/SRC only. Refresh brief_current_context and keep this as evidence unless it changes the working_argument; do not create a mechanical command/commit CLM.",
                     event="PostToolUse",
                 )
     return 0

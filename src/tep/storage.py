@@ -1223,6 +1223,7 @@ class TEPHome:
         stdout: str = "",
         stderr: str = "",
         agent_ref: str | None = None,
+        open_act_ref: str | None = None,
         preflight_run_ref: str | None = None,
     ) -> dict[str, Any]:
         self.ensure_workspace(workspace_ref)
@@ -1237,6 +1238,7 @@ class TEPHome:
             "record_type": "run",
             "workspace_ref": workspace_ref,
             "agent_ref": agent_ref,
+            "open_act_ref": open_act_ref,
             "preflight_run_ref": preflight_run_ref,
             "status": "captured",
             "run_kind": "bash",

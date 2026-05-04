@@ -100,6 +100,47 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(marker["agent_ref"], second.agent_ref)
             self.assertEqual(marker["thread_ref"], "thread-2")
 
+    def test_brief_current_context_surfaces_working_argument_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("argument-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            task = runtime.create_task(workspace["id"], "Explain what the verification proves.").data["task"]
+            runtime.attach_agent_to_task(workspace["id"], agent["id"], task["id"])
+            claim = runtime.create_claim(workspace["id"], "Commit e9390db was created and git status --short was clean.").data["claim"]
+            runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot bookkeeping observation.",
+                difficulty_bits=8,
+            )
+
+            brief = runtime.brief_current_context(workspace["id"], agent["id"])
+
+            self.assertTrue(brief.ok, brief.error)
+            argument = brief.data["working_argument"]
+            self.assertEqual(argument["current_question"], task["goal"])
+            self.assertEqual(argument["claim_chain"][0]["claim_ref"], claim["id"])
+            self.assertIn(claim["id"], argument["bookkeeping_claim_refs"])
+            gap_codes = {gap["code"] for gap in argument["gaps"]}
+            self.assertIn("bookkeeping_claims_in_chain", gap_codes)
+            self.assertIn("unsupported_claims_in_chain", gap_codes)
+
+    def test_bookkeeping_claim_gets_soft_pressure_not_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+
+            response = runtime.create_claim(workspace["id"], "Commit e9390db was created and git status --short was clean.")
+
+            self.assertTrue(response.ok, response.error)
+            self.assertTrue(response.claim_pressure)
+            self.assertIn("bookkeeping", response.claim_pressure[0]["why"])
+            self.assertIn("append_ledger", {move["operation_kind"] for move in response.valid_moves})
+
     def test_settings_merge_and_action_pressure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
@@ -2179,7 +2220,7 @@ class CoreTests(unittest.TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("extract_run_claim_candidates", completed.stdout)
-            self.assertIn("what did this test output teach", completed.stdout)
+            self.assertIn("working_argument", completed.stdout)
 
     def test_codex_hook_resolves_latest_workspace_when_project_has_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2638,6 +2679,18 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(run["status"], "captured")
             self.assertEqual(run["stdout_hash"], bytes_hash("1 passed\n".encode("utf-8")))
 
+            with_act = runtime.capture_bash_command(
+                workspace["id"],
+                command="pytest -q",
+                cwd=tmp,
+                exit_code=0,
+                stdout="1 passed\n",
+                agent_ref=None,
+                open_act_ref="L-000001",
+            )
+            self.assertTrue(with_act.ok, with_act.error)
+            self.assertEqual(with_act.data["run"]["open_act_ref"], "L-000001")
+
             source_response = runtime.capture_run_output_source(
                 workspace["id"],
                 run_ref=run["id"],
@@ -3083,7 +3136,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.28")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.29")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3142,7 +3195,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.28")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.29")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3160,7 +3213,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.28")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.29")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
