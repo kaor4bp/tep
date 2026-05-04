@@ -23,7 +23,7 @@ This document defines the public vocabulary for TEP v1.
 
 `CLM@rev`
 : A ledger-local claim snapshot reference such as
-`CLM-20260424-ab12cd34@3`. Revisions exist only inside the reasoning ledger.
+`CLM-20260505-aB3x9Kp2LmQ8Zt7N@3`. Revisions exist only inside the reasoning ledger.
 Outside ledger APIs and schemas, claims are referenced as bare `CLM-*`.
 
 `semantic_hash`

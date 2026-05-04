@@ -117,6 +117,9 @@ accepted `SRC-*`.
 
 - One canonical JSON object per `SRC-*`, `CLM-*`, `TASK-*`, `AGENT-*`, `PRJ-*`,
   and `WSP-*` file.
+- New protocol ids use `PREFIX-YYYYMMDD-<base62>` with mixed-case ASCII
+  letters and digits, for example `CLM-20260505-aB3x9Kp2LmQ8Zt7N`.
+  Legacy `PREFIX-YYYYMMDD-<hex>` ids remain readable.
 - Ledger and membership files are JSONL.
 - Source acceptance/classification audit events are JSONL.
 - Source audit events are append-only and hash-chained.
@@ -124,6 +127,10 @@ accepted `SRC-*`.
   prior rows.
 - Failed MCP mutations write nothing.
 - Generated files must not be treated as canonical proof.
+
+`tep-migrate-short-ids` can shorten mutable legacy hex ids. It must not rewrite
+sealed `ledger.jsonl` rows or `source_events.jsonl`; ids cited by those logs
+stay in legacy form so historical replay remains valid.
 
 ## Transactions And Journals
 

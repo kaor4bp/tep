@@ -23,10 +23,12 @@ from tep import (
 )
 from tep.crypto import public_key_from_private
 from tep.errors import CanonicalJSONError, OwnershipError, StorageError, ValidationError
+from tep.ids import LEGACY_ID_RE, new_id
 from tep.jsoncanon import bytes_hash, canonical_dumps
 from tep.mcp_stdio_server import TEPMCPStdioServer
 from tep.mcp_stdio_server import run_loop_binary as run_mcp_loop_binary
 from tep.mcp_stdio_server import run_loop as run_mcp_loop
+from tep.migrations import migrate_short_ids
 
 
 class CoreTests(unittest.TestCase):
@@ -73,6 +75,12 @@ class CoreTests(unittest.TestCase):
     def test_canonical_json_rejects_floats(self) -> None:
         with self.assertRaises(CanonicalJSONError):
             canonical_dumps({"score": 0.5})
+
+    def test_new_id_uses_short_base62_token(self) -> None:
+        value = new_id("CLM", random_chars=16)
+
+        self.assertRegex(value, r"^CLM-\d{8}-[A-Za-z0-9]{16}$")
+        self.assertIsNone(LEGACY_ID_RE.fullmatch(value))
 
     def test_agent_private_key_is_not_stored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1515,6 +1523,81 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(lookup.ok, lookup.error)
             self.assertIn(claim["id"], {item["record_ref"] for item in lookup.data["results"]})
             self.assertTrue(str(store.claim_path(first_workspace["id"], claim["id"])).startswith(str(Path(tmp) / "records" / "claims")))
+
+    def test_short_id_migration_rewrites_mutable_refs_and_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_ref = "PRJ-20260505-" + "a" * 48
+            workspace_ref = "WSP-20260505-" + "b" * 48
+            task_ref = "TASK-20260505-" + "c" * 48
+            source_ref = "SRC-20260505-" + "d" * 48
+            claim_ref = "CLM-20260505-" + "e" * 48
+            project_path = root / "registry" / "projects" / f"{project_ref}.json"
+            workspace_path = root / "registry" / "workspaces" / f"{workspace_ref}.json"
+            task_path = root / "workspaces" / workspace_ref / "tasks" / f"{task_ref}.json"
+            source_path = root / "records" / "sources" / "2026" / "05" / f"{source_ref}.json"
+            claim_path = root / "records" / "claims" / "2026" / "05" / f"{claim_ref}.json"
+            membership_path = root / "workspaces" / workspace_ref / "memberships" / "projects.jsonl"
+            for path, payload in [
+                (project_path, {"id": project_ref, "record_type": "project", "parent_project_refs": []}),
+                (workspace_path, {"id": workspace_ref, "record_type": "workspace", "name": "legacy"}),
+                (task_path, {"id": task_ref, "workspace_ref": workspace_ref, "claim_refs": [claim_ref]}),
+                (source_path, {"id": source_ref, "record_type": "source", "workspace_ref": workspace_ref}),
+                (claim_path, {"id": claim_ref, "record_type": "claim", "source_refs": [source_ref], "scope": {"workspace_ref": workspace_ref, "project_refs": [project_ref], "task_refs": [task_ref]}}),
+            ]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(canonical_dumps(payload) + "\n", encoding="utf-8")
+            membership_path.parent.mkdir(parents=True, exist_ok=True)
+            membership_path.write_text(canonical_dumps({"project_ref": project_ref, "active": True}) + "\n", encoding="utf-8")
+
+            result = migrate_short_ids(root)
+
+            for old_ref in [project_ref, workspace_ref, task_ref, source_ref, claim_ref]:
+                self.assertIn(old_ref, result.id_map)
+                self.assertRegex(result.id_map[old_ref], rf"^{old_ref.split('-', 1)[0]}-20260505-[A-Za-z0-9]{{16}}$")
+            new_workspace = result.id_map[workspace_ref]
+            new_project = result.id_map[project_ref]
+            new_task = result.id_map[task_ref]
+            new_source = result.id_map[source_ref]
+            new_claim = result.id_map[claim_ref]
+            self.assertFalse(workspace_path.exists())
+            self.assertTrue((root / "registry" / "workspaces" / f"{new_workspace}.json").exists())
+            migrated_task = json.loads((root / "workspaces" / new_workspace / "tasks" / f"{new_task}.json").read_text(encoding="utf-8"))
+            self.assertEqual(migrated_task["workspace_ref"], new_workspace)
+            migrated_claim = json.loads((root / "records" / "claims" / "2026" / "05" / f"{new_claim}.json").read_text(encoding="utf-8"))
+            self.assertEqual(migrated_claim["source_refs"], [new_source])
+            self.assertEqual(migrated_claim["scope"]["project_refs"], [new_project])
+
+    def test_short_id_migration_preserves_sealed_log_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_ref = "WSP-20260505-" + "b" * 48
+            agent_ref = "AGENT-20260505-" + "f" * 48
+            source_ref = "SRC-20260505-" + "d" * 48
+            claim_ref = "CLM-20260505-" + "e" * 48
+            source_path = root / "records" / "sources" / "2026" / "05" / f"{source_ref}.json"
+            claim_path = root / "records" / "claims" / "2026" / "05" / f"{claim_ref}.json"
+            ledger_path = root / "workspaces" / workspace_ref / "agents" / agent_ref / "ledger.jsonl"
+            events_path = root / "records" / "sources" / "source_events.jsonl"
+            for path, payload in [
+                (source_path, {"id": source_ref, "record_type": "source", "workspace_ref": workspace_ref}),
+                (claim_path, {"id": claim_ref, "record_type": "claim", "source_refs": [source_ref]}),
+            ]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(canonical_dumps(payload) + "\n", encoding="utf-8")
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_path.write_text(canonical_dumps({"id": "L-000001", "ref": claim_ref, "source_snapshots": [{"ref": source_ref}]}) + "\n", encoding="utf-8")
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            events_path.write_text(canonical_dumps({"event_id": "SE-20260505-" + "1" * 48, "source_ref": source_ref}) + "\n", encoding="utf-8")
+
+            result = migrate_short_ids(root)
+
+            self.assertNotIn(source_ref, result.id_map)
+            self.assertNotIn(claim_ref, result.id_map)
+            self.assertTrue(source_path.exists())
+            self.assertTrue(claim_path.exists())
+            self.assertIn(source_ref, ledger_path.read_text(encoding="utf-8"))
+            self.assertIn(claim_ref, ledger_path.read_text(encoding="utf-8"))
 
     def test_legacy_workspace_claim_and_source_paths_still_replay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3264,7 +3347,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.2")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.3")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3326,7 +3409,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.2")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.3")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3344,7 +3427,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.2")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.3")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
