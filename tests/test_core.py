@@ -2923,15 +2923,19 @@ class CoreTests(unittest.TestCase):
             adapter = MCPAdapter(Runtime(TEPHome(tmp)))
             tool_names = {tool["name"] for tool in adapter.list_tools()}
             self.assertEqual(
-                {"generate_agent_identity", "start_agent_thread", "brief", "capture", "claim", "relate", "reason", "act", "lookup", "finish"},
+                {"generate_agent_identity", "start_agent_thread", "brief", "capture", "task", "claim", "relate", "reason", "act", "lookup", "finish"},
                 tool_names,
             )
             self.assertIn("start_agent_thread", tool_names)
             self.assertIn("reason", tool_names)
             self.assertIn("act", tool_names)
             self.assertIn("finish", tool_names)
+            self.assertIn("task", tool_names)
             capture_tool = next(tool for tool in adapter.list_tools() if tool["name"] == "capture")
             self.assertIn("source_ref", capture_tool["optional"])
+            task_tool = next(tool for tool in adapter.list_tools() if tool["name"] == "task")
+            self.assertIn("task_action", task_tool["required"])
+            self.assertIn("support_refs", task_tool["optional"])
             self.assertNotIn("append_ledger", tool_names)
             self.assertNotIn("create_claim", tool_names)
 
@@ -2980,6 +2984,26 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(agent["data"]["agent"]["key_fingerprint"], identity["data"]["key_fingerprint"])
             self.assertNotIn(identity["data"]["agent_private_key"], json.dumps(agent["data"]["agent"], sort_keys=True))
 
+            task = adapter.call_tool(
+                "task",
+                {
+                    "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "task_action": "create",
+                    "goal": "Answer with public task API.",
+                },
+            )
+            self.assertTrue(task["ok"], task.get("error"))
+            attached = adapter.call_tool(
+                "task",
+                {
+                    "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "task_action": "attach_agent",
+                    "agent_ref": agent["data"]["agent"]["id"],
+                    "task_ref": task["data"]["task"]["id"],
+                },
+            )
+            self.assertTrue(attached["ok"], attached.get("error"))
+
             source = adapter.call_tool(
                 "capture",
                 {
@@ -3000,6 +3024,19 @@ class CoreTests(unittest.TestCase):
                 },
             )
             self.assertTrue(claim["ok"], claim.get("error"))
+            context = adapter.call_tool(
+                "task",
+                {
+                    "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "task_action": "compile_context",
+                    "task_ref": task["data"]["task"]["id"],
+                    "kind": "task_briefing",
+                    "text": "# Task\nUse public task context.\n",
+                    "support_refs": [claim["data"]["claim"]["id"]],
+                    "agent_ref": agent["data"]["agent"]["id"],
+                },
+            )
+            self.assertTrue(context["ok"], context.get("error"))
             append = adapter.call_tool(
                 "reason",
                 {
@@ -3221,13 +3258,14 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.0")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.1")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             self.assertIn("generate_agent_identity", tool_names)
             self.assertIn("reason", tool_names)
             self.assertIn("capture", tool_names)
+            self.assertIn("task", tool_names)
             self.assertNotIn("append_ledger", tool_names)
             capture_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "capture")
             self.assertIn("source_ref", capture_tool["inputSchema"]["properties"])
@@ -3282,7 +3320,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.0")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.1")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3300,7 +3338,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.0")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.1")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

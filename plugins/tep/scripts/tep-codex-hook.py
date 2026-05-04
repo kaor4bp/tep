@@ -738,7 +738,7 @@ def handle_pre_bash(payload: dict) -> int:
         emit_deny(
             "Task work is blocked until required TEP context packs exist. "
             f"missing_context={','.join(missing_context)}. "
-            "Use lookup_facts and compile_context_pack before running task-bound Bash."
+            "Use public TEP lookup and task(compile_context) before running task-bound Bash."
         )
         return 0
     pressure = bash_pressure(settings, classify_bash(command), open_act_ref(pointer, wsp, settings))

@@ -50,6 +50,8 @@ Public agent tools are intentionally small:
   and valid public moves.
 - `capture`: capture user input, text, files, command observations, excerpts,
   fragments, or extraction candidates as evidence.
+- `task`: create/attach/decompose/defer tasks and compile/list/revoke task
+  context packs.
 - `claim`: register one atomic `CLM-*` from explicit `based_on` refs.
 - `relate`: create a relation `CLM-*` explaining support, contradiction,
   applicability, dependency, freshness, or equivalence.
@@ -100,9 +102,9 @@ all records. If no useful CLM chain exists, say that explicitly and start by
 looking up or capturing facts instead of inventing a chain.
 
 Do not create a new `WSP-*` just because a new agent session starts. Reuse the
-workspace already attached to the local `.tep` `project_ref`; when calling
-`create_workspace`, pass `project_ref` so TEP can return the existing workspace
-instead of creating a duplicate.
+workspace already attached to the local `.tep` `project_ref`. If no workspace
+can be resolved from the project pointer, treat that as setup work instead of
+silently creating duplicate workspaces.
 
 `AGENT-*` is a live thread/session, not a reusable personality. Do not continue
 another agent's ledger with this thread's key. Foreign ledgers are readable for
@@ -170,8 +172,7 @@ separate files by kind so the agent can load only what it needs:
 - `project_conventions`
 
 Use `brief` to discover active/stale context packs. Low-level context
-compilation remains an internal setup/admin operation until the public task
-context API is narrowed.
+compilation is exposed through `task` with `task_action="compile_context"`.
 
 Context pack compilation takes selected `CLM-*`/`SRC-*` support refs and the
 agent-written markdown text. Packs may be task-scoped, project-scoped, or global
@@ -417,8 +418,10 @@ Good default loop:
 
 1. Brief context.
 2. Lookup relevant facts.
-3. Capture new inputs or observations.
-4. Create claims and relations.
-5. Append supported reasoning with `reason`.
-6. Open and close probes for uncertain or protected work.
-7. Validate ledger before final answer or task done.
+3. Create/attach/decompose task scope or compile missing task context with
+   `task` when briefing says task context is missing.
+4. Capture new inputs or observations.
+5. Create claims and relations.
+6. Append supported reasoning with `reason`.
+7. Open and close probes for uncertain or protected work.
+8. Validate ledger before final answer or task done.

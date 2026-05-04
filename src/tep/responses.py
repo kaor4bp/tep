@@ -10,6 +10,13 @@ PUBLIC_MOVE_TOOL_BY_OPERATION = {
     "brief_current_context": "brief",
     "lookup_facts": "lookup",
     "project_registry_search": "lookup",
+    "create_task": "task",
+    "attach_agent_to_task": "task",
+    "decompose_task": "task",
+    "defer_task": "task",
+    "compile_context_pack": "task",
+    "list_context_packs": "task",
+    "revoke_context_pack": "task",
     "create_source": "capture",
     "ingest_text": "capture",
     "ingest_file": "capture",
@@ -34,7 +41,6 @@ PUBLIC_MOVE_TOOL_BY_OPERATION = {
     "final_answer_preflight": "finish",
     "task_done_preflight": "finish",
     "final_answer": "finish",
-    "defer_task": "finish",
 }
 
 

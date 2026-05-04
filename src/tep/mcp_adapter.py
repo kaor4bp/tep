@@ -57,6 +57,18 @@ class MCPAdapter:
                 ),
                 self._capture,
             ),
+            "task": (
+                MCPToolSpec(
+                    "task",
+                    "task",
+                    True,
+                    "Create, attach, decompose, defer, or compile task context.",
+                    ("workspace_ref", "task_action"),
+                    ("goal", "task_ref", "parent_task_ref", "goals", "agent_ref", "project_ref", "project_refs", "done_criteria", "kind", "text", "support_refs", "resume_condition", "reason", "scope_type", "context_ref"),
+                    True,
+                ),
+                self._task,
+            ),
             "claim": (
                 MCPToolSpec(
                     "claim",
@@ -566,6 +578,43 @@ class MCPAdapter:
                 actor_ref=args.get("actor_ref", "runtime"),
             )
         raise ValueError(f"unsupported capture_kind: {kind}")
+
+    def _task(self, args: dict[str, Any]) -> RuntimeResponse:
+        action = str(args["task_action"])
+        if action == "create":
+            return self.runtime.create_task(
+                args["workspace_ref"],
+                args["goal"],
+                parent_task_ref=args.get("parent_task_ref"),
+                project_refs=args.get("project_refs"),
+                done_criteria=args.get("done_criteria"),
+            )
+        if action == "attach_agent":
+            return self.runtime.attach_agent_to_task(args["workspace_ref"], args["agent_ref"], args["task_ref"])
+        if action == "decompose":
+            return self.runtime.decompose_task(args["workspace_ref"], args["parent_task_ref"], args["goals"])
+        if action == "defer":
+            return self.runtime.defer_task(args["workspace_ref"], args["task_ref"], reason=args["reason"], resume_condition=args.get("resume_condition"))
+        if action == "compile_context":
+            return self.runtime.compile_context_pack(
+                args["workspace_ref"],
+                task_ref=args.get("task_ref"),
+                project_ref=args.get("project_ref"),
+                kind=args["kind"],
+                text=args["text"],
+                support_refs=args["support_refs"],
+                agent_ref=args.get("agent_ref"),
+            )
+        if action == "list_context":
+            return self.runtime.list_context_packs(
+                args["workspace_ref"],
+                task_ref=args.get("task_ref"),
+                project_ref=args.get("project_ref"),
+                scope_type=args.get("scope_type"),
+            )
+        if action == "revoke_context":
+            return self.runtime.revoke_context_pack(args["workspace_ref"], args["context_ref"], reason=args["reason"])
+        raise ValueError(f"unsupported task_action: {action}")
 
     def _claim(self, args: dict[str, Any]) -> RuntimeResponse:
         based_on = args["based_on"]
