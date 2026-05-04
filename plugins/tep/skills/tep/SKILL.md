@@ -66,6 +66,21 @@ At the beginning of a TEP-backed task:
 10. If a task is active, check `compiled_context.execution_state`. Do not work
     on the task until all required `CTX-*` packs exist.
 
+After the briefing, write a short visible TEP briefing for the user before
+doing substantial work:
+
+- Guidelines/context packs you will apply, by `CTX-*` ref or file path when
+  available.
+- Current task/question from `task.goal` and `working_argument.current_question`.
+- Current fact chain: the relevant `CLM-*` refs and one-line interpretation of
+  what each means for this task.
+- Evidence leaves: key `SRC-*`/`RUN-*` refs, if any.
+- Gaps/uncertainties from `working_argument.gaps`.
+
+Keep it compact. The goal is to make your reasoning anchor visible, not to dump
+all records. If no useful CLM chain exists, say that explicitly and start by
+looking up or capturing facts instead of inventing a chain.
+
 Do not create a new `WSP-*` just because a new agent session starts. Reuse the
 workspace already attached to the local `.tep` `project_ref`; when calling
 `create_workspace`, pass `project_ref` so TEP can return the existing workspace
@@ -308,6 +323,17 @@ Final answers should call `final_answer_preflight` with selected `CLM-*` support
 refs. `SRC-*`/`RUN-*` evidence must first be converted into a claim. Task
 completion should call `task_done_preflight`. Do not present blocked support as
 final truth.
+
+At the end of a TEP-backed task, include a short visible support summary before
+or inside the final answer:
+
+- `CLM-*` refs you actually relied on.
+- Your interpretation of those claims in plain language.
+- `SRC-*`/`RUN-*` evidence that matters.
+- Remaining gaps, unsupported runtime observations, or assumptions.
+
+Do not hide behind “tests passed” or “commit created”. Explain which system
+fact, contract, behavior, or task outcome those observations support.
 
 ## Let TEP Reduce Thinking Load
 

@@ -2145,6 +2145,39 @@ class CoreTests(unittest.TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("record durable system facts as CLM-*", completed.stdout)
+            self.assertIn("compact TEP briefing", completed.stdout)
+            self.assertIn("CLM fact chain", completed.stdout)
+
+    def test_codex_hook_stop_reminds_agent_to_show_support_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tep_home = Path(tmp) / "tep-home"
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            store = TEPHome(tep_home)
+            project = store.register_project("project", roots=[str(project_root)])
+            workspace = store.create_workspace("workspace")
+            store.attach_project_to_workspace(workspace["id"], project["id"], role="primary", reason="hook test")
+            runtime = Runtime(store)
+            identity = generate_agent_identity("stop-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            init_project_pointer(project_root, tep_home=tep_home, project_ref=project["id"], mcp_server="stdio")
+
+            script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-codex-hook.py"
+            env = dict(os.environ)
+            env.pop("TEP_AGENT_REF", None)
+            completed = subprocess.run(
+                [sys.executable, str(script), "stop"],
+                input=json.dumps({"cwd": str(project_root)}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(agent["id"], completed.stdout)
+            self.assertIn("compact support summary", completed.stdout)
+            self.assertIn("CLM refs used", completed.stdout)
 
     def test_codex_hook_captures_post_bash_with_stdio_pointer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3136,7 +3169,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.29")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.30")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3195,7 +3228,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.29")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.30")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3213,7 +3246,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.29")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.30")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

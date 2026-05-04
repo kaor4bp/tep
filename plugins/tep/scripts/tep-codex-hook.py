@@ -653,7 +653,9 @@ def handle_session_start(payload: dict) -> int:
         return 0
     message = (
         "TEP hooks visible. Start by generating/continuing in-memory agent identity, "
-        "then call brief_current_context. During the task, record durable system facts as CLM-* when observations change your understanding."
+        "then call brief_current_context. Before substantial work, show the user a compact TEP briefing: "
+        "guidelines/CTX refs, current task question, CLM fact chain, evidence leaves, and gaps. "
+        "During the task, record durable system facts as CLM-* only when observations change your understanding."
     )
     wsp = resolve_workspace_ref(pointer, cwd)
     if wsp is None:
@@ -816,9 +818,17 @@ def handle_post_bash(payload: dict) -> int:
 
 
 def handle_stop(payload: dict) -> int:
-    if os.environ.get("TEP_AGENT_REF") and workspace_ref():
+    cwd = action_cwd(payload)
+    _pointer_path, pointer = find_pointer(cwd)
+    wsp = resolve_workspace_ref(pointer, cwd)
+    agent_ref = current_agent_ref(pointer, wsp) if pointer and wsp else None
+    if pointer and wsp:
+        prefix = f"Current TEP agent={agent_ref}. " if agent_ref else ""
         emit_context(
-            "Before final answer/task done, record any newly learned durable system facts as CLM-* with SRC support, then call final_answer_preflight or task_done_preflight with selected support refs.",
+            prefix
+            + "Before final answer/task done, refresh brief_current_context and show a compact support summary: "
+            "CLM refs used, your interpretation of those claims, important SRC/RUN evidence, and remaining gaps. "
+            "Then call final_answer_preflight or task_done_preflight with selected CLM-* support refs.",
             event="Stop",
         )
     return 0
