@@ -1679,6 +1679,7 @@ class Runtime:
                         "kind": row.get("kind"),
                         "claim_ref": ref,
                         "statement": claim.get("statement"),
+                        "display": self._claim_display(workspace_ref, claim),
                         "source_refs": source_refs,
                         "trust_posture": trust_posture,
                     }
@@ -1706,6 +1707,7 @@ class Runtime:
         return {
             "current_question": active_task.get("goal") if active_task else None,
             "claim_chain": chain[-8:],
+            "compact_claim_chain": [item["display"] for item in chain[-5:]],
             "evidence_leaves": sorted(set(evidence_leaves))[:12],
             "bookkeeping_claim_refs": bookkeeping_refs[:8],
             "chain_trust_index": chain_trust_index,
@@ -1760,6 +1762,40 @@ class Runtime:
             return "Your ledger shape may be formally valid but weak. Before acting, name the CLM-* you rely on, the evidence leaf behind it, and the gap the next action will close."
         return "Are you still working on this fact chain? If not, update the chain before acting; if yes, explain how the next action will change one CLM-* or close one gap."
 
+    def _claim_display(self, workspace_ref: str, claim: dict[str, Any]) -> dict[str, Any]:
+        statement = self._short_display_text(str(claim.get("statement") or ""))
+        evidence_quote = self._claim_quote(workspace_ref, claim)
+        snippet = evidence_quote or statement
+        label = f"{claim['id']}: \"{snippet}\" -> {statement}" if evidence_quote else f"{claim['id']}: \"{snippet}\""
+        return {
+            "claim_ref": claim["id"],
+            "quote": snippet,
+            "statement": statement,
+            "label": label,
+        }
+
+    def _claim_quote(self, workspace_ref: str, claim: dict[str, Any]) -> str | None:
+        for ref in claim.get("source_refs", []):
+            if not isinstance(ref, str):
+                continue
+            try:
+                record = self._read_record(workspace_ref, ref)
+            except TEPError:
+                continue
+            quote = record.get("quote")
+            if isinstance(quote, str) and quote.strip():
+                return self._short_display_text(quote)
+            if isinstance(quote, dict) and quote.get("encrypted"):
+                return "[encrypted evidence]"
+        return None
+
+    @staticmethod
+    def _short_display_text(text: str, *, limit: int = 140) -> str:
+        compact = " ".join(text.split())
+        if len(compact) <= limit:
+            return compact
+        return compact[: max(0, limit - 3)].rstrip() + "..."
+
     def _read_record(self, workspace_ref: str, record_ref: str) -> dict[str, Any]:
         if record_ref.startswith("CLM-"):
             return self.store.read_claim(workspace_ref, record_ref)
@@ -1789,6 +1825,7 @@ class Runtime:
         return {
             "record_ref": claim["id"],
             "statement": claim["statement"],
+            "display": self._claim_display(workspace_ref, claim),
             "scope_origin": scope["scope_origin"],
             "workspace_ref": workspace_ref,
             "project_refs": claim.get("scope", {}).get("project_refs", []),
@@ -1894,6 +1931,7 @@ class Runtime:
             support.append(
                 {
                     "claim_ref": claim_ref,
+                    "display": self._claim_display(workspace_ref, claim),
                     "trust_posture": posture,
                     "scope": scope,
                     "bridge_ref": bridge_ref,

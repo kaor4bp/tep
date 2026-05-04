@@ -113,6 +113,12 @@ def has_visible_tep_support_summary(text: str) -> bool:
     if not text.strip():
         return False
     has_claim_ref = bool(re.search(r"\bCLM-\d{8}-[0-9a-f]{16,}\b|\bCLM-[A-Za-z0-9_-]+\b", text))
+    has_claim_snippet = bool(
+        re.search(
+            r"\bCLM-(?:\d{8}-[0-9a-f]{16,}|[A-Za-z0-9_-]+)\b\s*(?::|-|->|—)\s*(?:\"[^\"]{8,}\"|'[^']{8,}'|[^.\n]{16,})",
+            text,
+        )
+    )
     has_summary_marker = any(
         marker in text.casefold()
         for marker in (
@@ -126,7 +132,7 @@ def has_visible_tep_support_summary(text: str) -> bool:
             "клейм",
         )
     )
-    return has_claim_ref and has_summary_marker
+    return has_claim_ref and has_claim_snippet and has_summary_marker
 
 
 def merge_settings(*records: dict[str, Any]) -> dict[str, Any]:
@@ -875,7 +881,7 @@ def handle_stop(payload: dict) -> int:
         emit_stop_block(
             prefix
             + "Before final answer/task done, refresh TEP brief and show a compact support summary: "
-            "CLM refs used, your interpretation of those claims, important SRC/RUN evidence, and remaining gaps. "
+            "CLM refs used with short quotes/snippets, your interpretation of those claims, important SRC/RUN evidence, and remaining gaps. "
             "Then call finish with selected CLM-* support refs.",
         )
     return 0

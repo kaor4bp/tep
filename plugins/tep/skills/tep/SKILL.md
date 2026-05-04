@@ -92,14 +92,21 @@ doing substantial work:
 - Guidelines/context packs you will apply, by `CTX-*` ref or file path when
   available.
 - Current task/question from `task.goal` and `working_argument.current_question`.
-- Current fact chain: the relevant `CLM-*` refs and one-line interpretation of
-  what each means for this task.
+- Current fact chain: at most 3-5 relevant `CLM-*` refs, each with a short
+  quote/snippet and one-line interpretation of what it means for this task.
+  Prefer `working_argument.compact_claim_chain` when present.
 - Evidence leaves: key `SRC-*`/`RUN-*` refs, if any.
 - Gaps/uncertainties from `working_argument.gaps`.
 
 Keep it compact. The goal is to make your reasoning anchor visible, not to dump
 all records. If no useful CLM chain exists, say that explicitly and start by
 looking up or capturing facts instead of inventing a chain.
+
+Do not show bare `CLM-*` ids to the user. User-facing support should look like
+`CLM-...: "short quote" -> my interpretation`. The quote may come from the
+claim's source excerpt or, if no source quote is available, a compact statement
+snippet. This keeps the chain auditable without forcing the user to open raw
+records.
 
 Do not create a new `WSP-*` just because a new agent session starts. Reuse the
 workspace already attached to the local `.tep` `project_ref`. If no workspace
@@ -384,7 +391,7 @@ final truth.
 At the end of a TEP-backed task, include a short visible support summary before
 or inside the final answer:
 
-- `CLM-*` refs you actually relied on.
+- `CLM-*` refs you actually relied on, each with a short quote/snippet.
 - Your interpretation of those claims in plain language.
 - `SRC-*`/`RUN-*` evidence that matters.
 - Remaining gaps, unsupported runtime observations, or assumptions.

@@ -139,6 +139,9 @@ class CoreTests(unittest.TestCase):
             argument = brief.data["working_argument"]
             self.assertEqual(argument["current_question"], task["goal"])
             self.assertEqual(argument["claim_chain"][0]["claim_ref"], claim["id"])
+            self.assertEqual(argument["claim_chain"][0]["display"]["quote"], claim["statement"])
+            self.assertEqual(argument["compact_claim_chain"][0]["claim_ref"], claim["id"])
+            self.assertIn(claim["statement"], argument["compact_claim_chain"][0]["label"])
             self.assertIn(claim["id"], argument["bookkeeping_claim_refs"])
             self.assertEqual(argument["chain_trust_index"]["label"], "low")
             gap_codes = {gap["code"] for gap in argument["gaps"]}
@@ -1465,6 +1468,8 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(lookup.ok)
             result = next(item for item in lookup.data["results"] if item["record_ref"] == local_claim["id"])
             self.assertEqual(result["scope_origin"], "primary_project")
+            self.assertEqual(result["display"]["quote"], "Retry policy is defined in settings.py.")
+            self.assertIn(local_claim["id"], result["display"]["label"])
             self.assertFalse(result["requires_bridge"])
             self.assertEqual(result["trust_posture"]["derived_label"], "trusted_fact")
             self.assertTrue(result["proof_usable_now"])
@@ -2173,6 +2178,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Deduction:", text)
         self.assertIn("Induction:", text)
         self.assertIn("Abduction:", text)
+        self.assertIn('`CLM-...: "short quote" -> my interpretation`', text)
         self.assertIn("Stop the chain when the next step would require a hypothesis built only on", text)
 
     def test_codex_hook_stop_blocks_without_visible_support_summary(self) -> None:
@@ -2206,11 +2212,11 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(output["decision"], "block")
             self.assertIn(agent["id"], output["reason"])
             self.assertIn("compact support summary", output["reason"])
-            self.assertIn("CLM refs used", output["reason"])
+            self.assertIn("short quotes/snippets", output["reason"])
 
             accepted = subprocess.run(
                 [sys.executable, str(script), "stop"],
-                input=json.dumps({"cwd": str(project_root), "last_assistant_message": "TEP support summary: CLM-20260504-abcdefabcdefabcd supports the final answer."}),
+                input=json.dumps({"cwd": str(project_root), "last_assistant_message": 'TEP support summary: CLM-20260504-abcdefabcdefabcd: "Retry policy is defined in settings.py." -> retry behavior is project-defined.'}),
                 text=True,
                 capture_output=True,
                 env=env,
@@ -3258,7 +3264,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.1")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.2")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3320,7 +3326,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.1")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.2")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3338,7 +3344,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.1")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.2")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
