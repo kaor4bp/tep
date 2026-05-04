@@ -2148,6 +2148,17 @@ class CoreTests(unittest.TestCase):
             self.assertIn("compact TEP briefing", completed.stdout)
             self.assertIn("CLM fact chain", completed.stdout)
 
+    def test_tep_skill_describes_logical_chain_construction(self) -> None:
+        skill = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "skills" / "tep" / "SKILL.md"
+        text = skill.read_text(encoding="utf-8")
+
+        self.assertIn("## Building Logical Chains", text)
+        self.assertIn("SRC/RUN/INP observation -> CLM point fact -> relation CLM -> task conclusion", text)
+        self.assertIn("Deduction:", text)
+        self.assertIn("Induction:", text)
+        self.assertIn("Abduction:", text)
+        self.assertIn("Stop the chain when the next step would require a hypothesis built only on", text)
+
     def test_codex_hook_stop_reminds_agent_to_show_support_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
@@ -3169,7 +3180,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.30")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.31")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3228,7 +3239,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.30")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.31")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3246,7 +3257,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.30")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.31")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

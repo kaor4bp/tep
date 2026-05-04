@@ -286,6 +286,52 @@ two project scopes unless both are visible in the current workspace. When a
 bridge is needed, prefer explicit bridge context: `general`, `task`, or
 `object_sync` with the concrete synchronized object.
 
+## Building Logical Chains
+
+Build arguments as explicit, inspectable chains. A useful chain has this shape:
+
+```text
+SRC/RUN/INP observation -> CLM point fact -> relation CLM -> task conclusion
+```
+
+Do not skip the relation step when the conclusion depends on more than one
+claim, crosses project scope, challenges an older fact, or uses an inference
+rather than a direct quote/observation. The relation is the place where you
+state why the link is valid.
+
+Use predictable inference patterns:
+
+- Deduction: trusted rule/policy plus observed case implies a specific result.
+- Induction: several independent observations suggest a pattern, but the result
+  remains hypothesis-like until supported by theory, documentation, or user
+  confirmation.
+- Abduction: facts make one explanation plausible; use it only to plan a probe,
+  not as final support.
+- Applicability: a fact from another project/scope applies here because a
+  bridge relation names the shared interface, task, or synchronized object.
+- Freshness challenge: a trusted fact may be stale; keep the old branch and open
+  an alternate probe branch instead of replacing it silently.
+- Contradiction: two claims cannot both guide the same task as-is; create a
+  relation that states the conflict and what evidence would resolve it.
+
+Stop the chain when the next step would require a hypothesis built only on
+another hypothesis. At that point, open an ACT for a bounded probe, capture more
+evidence, ask the user for an assumption/confirmation, or leave the gap visible.
+
+Before final/task-done support, read the chain backwards:
+
+1. What conclusion am I about to rely on?
+2. Which `CLM-*` directly supports it?
+3. Which relation explains the support, contradiction, applicability, or
+   freshness reasoning?
+4. Which `SRC-*`, `RUN-*`, or `INP-*` evidence anchors the leaf claim?
+5. Is any link only runtime repetition, command bookkeeping, or an unsupported
+   hypothesis?
+
+If the answer to step 5 is yes, do not present the chain as trusted final
+support. Either mark the gap in the visible support summary or gather stronger
+evidence first.
+
 ## Ledger And ACT Flow
 
 Use `append_ledger` to commit selected claim snapshots into the current
