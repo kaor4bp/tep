@@ -55,6 +55,21 @@ class CoreTests(unittest.TestCase):
             kinds.update(self._operation_kinds_from(value.as_dict()))
         return kinds
 
+    def _move_tools_from(self, value) -> set[str]:
+        tools: set[str] = set()
+        if isinstance(value, dict):
+            tool = value.get("tool")
+            if isinstance(tool, str):
+                tools.add(tool)
+            for child in value.values():
+                tools.update(self._move_tools_from(child))
+        elif isinstance(value, list):
+            for child in value:
+                tools.update(self._move_tools_from(child))
+        elif hasattr(value, "as_dict"):
+            tools.update(self._move_tools_from(value.as_dict()))
+        return tools
+
     def test_canonical_json_rejects_floats(self) -> None:
         with self.assertRaises(CanonicalJSONError):
             canonical_dumps({"score": 0.5})
@@ -125,6 +140,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(argument["current_question"], task["goal"])
             self.assertEqual(argument["claim_chain"][0]["claim_ref"], claim["id"])
             self.assertIn(claim["id"], argument["bookkeeping_claim_refs"])
+            self.assertEqual(argument["chain_trust_index"]["label"], "low")
             gap_codes = {gap["code"] for gap in argument["gaps"]}
             self.assertIn("bookkeeping_claims_in_chain", gap_codes)
             self.assertIn("unsupported_claims_in_chain", gap_codes)
@@ -2159,7 +2175,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Abduction:", text)
         self.assertIn("Stop the chain when the next step would require a hypothesis built only on", text)
 
-    def test_codex_hook_stop_reminds_agent_to_show_support_summary(self) -> None:
+    def test_codex_hook_stop_blocks_without_visible_support_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tep_home = Path(tmp) / "tep-home"
             project_root = Path(tmp) / "project"
@@ -2186,9 +2202,33 @@ class CoreTests(unittest.TestCase):
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn(agent["id"], completed.stdout)
-            self.assertIn("compact support summary", completed.stdout)
-            self.assertIn("CLM refs used", completed.stdout)
+            output = json.loads(completed.stdout)
+            self.assertEqual(output["decision"], "block")
+            self.assertIn(agent["id"], output["reason"])
+            self.assertIn("compact support summary", output["reason"])
+            self.assertIn("CLM refs used", output["reason"])
+
+            accepted = subprocess.run(
+                [sys.executable, str(script), "stop"],
+                input=json.dumps({"cwd": str(project_root), "last_assistant_message": "TEP support summary: CLM-20260504-abcdefabcdefabcd supports the final answer."}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(accepted.stdout, "")
+
+            recursive = subprocess.run(
+                [sys.executable, str(script), "stop"],
+                input=json.dumps({"cwd": str(project_root), "stop_hook_active": True}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(recursive.returncode, 0, recursive.stderr)
+            self.assertEqual(recursive.stdout, "")
 
     def test_codex_hook_captures_post_bash_with_stdio_pointer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2263,7 +2303,7 @@ class CoreTests(unittest.TestCase):
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn("extract_run_claim_candidates", completed.stdout)
+            self.assertIn("capture(extract_run_claim_candidates)", completed.stdout)
             self.assertIn("working_argument", completed.stdout)
 
     def test_codex_hook_resolves_latest_workspace_when_project_has_duplicates(self) -> None:
@@ -2882,30 +2922,18 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = MCPAdapter(Runtime(TEPHome(tmp)))
             tool_names = {tool["name"] for tool in adapter.list_tools()}
+            self.assertEqual(
+                {"generate_agent_identity", "start_agent_thread", "brief", "capture", "claim", "relate", "reason", "act", "lookup", "finish"},
+                tool_names,
+            )
             self.assertIn("start_agent_thread", tool_names)
-            self.assertIn("append_ledger", tool_names)
-            self.assertIn("protected_action_preflight", tool_names)
-            self.assertIn("final_answer_preflight", tool_names)
-            self.assertIn("task_done_preflight", tool_names)
-            self.assertIn("ingest_file", tool_names)
-            self.assertIn("capture_source_excerpt", tool_names)
-            self.assertIn("capture_source_fragments", tool_names)
-            self.assertIn("extract_claim_candidates", tool_names)
-            self.assertIn("confirm_source_for_scope", tool_names)
-            self.assertIn("create_claim_from_evidence", tool_names)
-            self.assertIn("capture_input", tool_names)
-            self.assertIn("capture_bash_command", tool_names)
-            self.assertIn("capture_run_output_source", tool_names)
-            self.assertIn("extract_run_claim_candidates", tool_names)
-            self.assertIn("decrypt_sensitive_field", tool_names)
-            self.assertIn("read_settings", tool_names)
-            self.assertIn("update_settings", tool_names)
-            self.assertIn("action_pressure", tool_names)
-            self.assertIn("compile_context_pack", tool_names)
-            self.assertIn("list_context_packs", tool_names)
-            self.assertIn("revoke_context_pack", tool_names)
-            compile_tool = next(tool for tool in adapter.list_tools() if tool["name"] == "compile_context_pack")
-            self.assertIn("task_ref", compile_tool["optional"])
+            self.assertIn("reason", tool_names)
+            self.assertIn("act", tool_names)
+            self.assertIn("finish", tool_names)
+            capture_tool = next(tool for tool in adapter.list_tools() if tool["name"] == "capture")
+            self.assertIn("source_ref", capture_tool["optional"])
+            self.assertNotIn("append_ledger", tool_names)
+            self.assertNotIn("create_claim", tool_names)
 
             missing = adapter.call_tool("create_workspace", {})
             self.assertFalse(missing["ok"])
@@ -2953,9 +2981,10 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn(identity["data"]["agent_private_key"], json.dumps(agent["data"]["agent"], sort_keys=True))
 
             source = adapter.call_tool(
-                "ingest_text",
+                "capture",
                 {
                     "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "capture_kind": "text",
                     "text": "Use this source through MCP adapter.",
                     "evidence_role": "intent",
                     "authority_scope": "task_intent",
@@ -2963,16 +2992,16 @@ class CoreTests(unittest.TestCase):
             )
             self.assertTrue(source["ok"], source.get("error"))
             claim = adapter.call_tool(
-                "create_claim",
+                "claim",
                 {
                     "workspace_ref": workspace["data"]["workspace"]["id"],
                     "statement": "The MCP adapter can create facts.",
-                    "source_refs": [source["data"]["source"]["id"]],
+                    "based_on": [source["data"]["source"]["id"]],
                 },
             )
             self.assertTrue(claim["ok"], claim.get("error"))
             append = adapter.call_tool(
-                "append_ledger",
+                "reason",
                 {
                     "workspace_ref": workspace["data"]["workspace"]["id"],
                     "agent_ref": agent["data"]["agent"]["id"],
@@ -2985,6 +3014,16 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(append["ok"], append.get("error"))
             self.assertTrue(append["ledger_pressure"]["ledger_valid"])
 
+            legacy_claim = adapter.call_tool(
+                "create_claim",
+                {
+                    "workspace_ref": workspace["data"]["workspace"]["id"],
+                    "statement": "Legacy direct call remains available for internal compatibility.",
+                    "source_refs": [source["data"]["source"]["id"]],
+                },
+            )
+            self.assertTrue(legacy_claim["ok"], legacy_claim.get("error"))
+
             unknown = adapter.call_tool("raw_json_write", {})
             self.assertFalse(unknown["ok"])
             self.assertEqual(unknown["error"]["code"], "unknown_tool")
@@ -2994,8 +3033,7 @@ class CoreTests(unittest.TestCase):
             runtime = Runtime(TEPHome(tmp))
             adapter = MCPAdapter(runtime)
             tool_names = {tool["name"] for tool in adapter.list_tools()}
-            virtual_operation_kinds = {"final_answer", "project_registry_search", "select_existing_claim"}
-            allowed = tool_names | virtual_operation_kinds
+            allowed = tool_names | {"final", "detail", "index", "mutate_record", "probe_step", "validate"}
             workspace = runtime.create_workspace("workspace").data["workspace"]
             path = Path(tmp) / "guide.md"
             path.write_text("# Guide\nUse settings.py.\n", encoding="utf-8")
@@ -3017,7 +3055,8 @@ class CoreTests(unittest.TestCase):
             for response in responses:
                 kinds = self._operation_kinds_from(response)
                 self.assertFalse({"classify_source", "accept_source", "reject_source"} & kinds)
-                self.assertTrue(kinds <= allowed, f"unsupported operation kinds: {sorted(kinds - allowed)}")
+                tools = self._move_tools_from(response)
+                self.assertTrue(tools <= allowed, f"unsupported move tools: {sorted(tools - allowed)}")
 
     def test_http_app_exposes_standalone_tool_api(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3030,7 +3069,8 @@ class CoreTests(unittest.TestCase):
 
             status, _headers, body = app.handle("GET", "/tools")
             self.assertEqual(status, 200)
-            self.assertIn("create_workspace", {tool["name"] for tool in json.loads(body)["tools"]})
+            self.assertIn("brief", {tool["name"] for tool in json.loads(body)["tools"]})
+            self.assertNotIn("create_workspace", {tool["name"] for tool in json.loads(body)["tools"]})
 
             status, _headers, body = app.handle(
                 "POST",
@@ -3146,7 +3186,8 @@ class CoreTests(unittest.TestCase):
 
             tools = app.handle_line(json.dumps({"method": "tools/list"}))
             self.assertTrue(tools["ok"])
-            self.assertIn("create_workspace", {tool["name"] for tool in tools["tools"]})
+            self.assertIn("brief", {tool["name"] for tool in tools["tools"]})
+            self.assertNotIn("create_workspace", {tool["name"] for tool in tools["tools"]})
 
             created = app.handle_line(
                 json.dumps(
@@ -3180,14 +3221,16 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.6.31")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.0")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             self.assertIn("generate_agent_identity", tool_names)
-            self.assertIn("append_ledger", tool_names)
-            compile_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "compile_context_pack")
-            self.assertIn("task_ref", compile_tool["inputSchema"]["properties"])
+            self.assertIn("reason", tool_names)
+            self.assertIn("capture", tool_names)
+            self.assertNotIn("append_ledger", tool_names)
+            capture_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "capture")
+            self.assertIn("source_ref", capture_tool["inputSchema"]["properties"])
 
             called = server.handle_message(
                 {
@@ -3239,7 +3282,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.31")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.0")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3257,7 +3300,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.6.31")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.0")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

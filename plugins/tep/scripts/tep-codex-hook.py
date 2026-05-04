@@ -85,6 +85,50 @@ def emit_deny(message: str) -> None:
     )
 
 
+def emit_stop_block(reason: str) -> None:
+    print(json.dumps({"decision": "block", "reason": reason}))
+
+
+def last_assistant_message(payload: dict) -> str:
+    for key in (
+        "last_assistant_message",
+        "assistant_message",
+        "last_response",
+        "response",
+        "message",
+        "text",
+        "transcript",
+    ):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def stop_hook_active(payload: dict) -> bool:
+    return bool(payload.get("stop_hook_active") or payload.get("stopHookActive"))
+
+
+def has_visible_tep_support_summary(text: str) -> bool:
+    if not text.strip():
+        return False
+    has_claim_ref = bool(re.search(r"\bCLM-\d{8}-[0-9a-f]{16,}\b|\bCLM-[A-Za-z0-9_-]+\b", text))
+    has_summary_marker = any(
+        marker in text.casefold()
+        for marker in (
+            "support summary",
+            "tep support",
+            "clm refs",
+            "final_answer_preflight",
+            "task_done_preflight",
+            "опора",
+            "цепоч",
+            "клейм",
+        )
+    )
+    return has_claim_ref and has_summary_marker
+
+
 def merge_settings(*records: dict[str, Any]) -> dict[str, Any]:
     result = json.loads(json.dumps(DEFAULT_SETTINGS))
     for record in records:
@@ -653,7 +697,7 @@ def handle_session_start(payload: dict) -> int:
         return 0
     message = (
         "TEP hooks visible. Start by generating/continuing in-memory agent identity, "
-        "then call brief_current_context. Before substantial work, show the user a compact TEP briefing: "
+        "then call TEP brief. Before substantial work, show the user a compact TEP briefing: "
         "guidelines/CTX refs, current task question, CLM fact chain, evidence leaves, and gaps. "
         "During the task, record durable system facts as CLM-* only when observations change your understanding."
     )
@@ -702,7 +746,7 @@ def handle_pre_bash(payload: dict) -> int:
         emit_deny(
             "Bash action is blocked by TEP enforcement settings. "
             f"classification={pressure['classification']} policy={pressure['bash_policy']}. "
-            "Open an ACT with open_probe before running this command; it must still be fresh."
+            "Open an ACT with public TEP act(open) before running this command; it must still be fresh."
         )
     elif pressure["act_required"]:
         prefix = "Bash action is ACT-bound before execution." if pressure["open_act"] else "Bash action should be bound to an open ACT before execution."
@@ -800,36 +844,39 @@ def handle_post_bash(payload: dict) -> int:
                     created_claims += 1
             if created_claims:
                 emit_context(
-                    f"Captured RUN/SRC and {created_claims} narrow observation CLM. Refresh brief_current_context and check working_argument: if this changes your model of the system, create separate system-behavior CLM-* facts and link them to the observation.",
+                    f"Captured RUN/SRC and {created_claims} narrow observation CLM. Refresh TEP brief and check working_argument: if this changes your model of the system, create separate system-behavior CLM-* facts and relate them to the observation.",
                     event="PostToolUse",
                 )
             else:
                 if classify_bash(command) == "evidence_producing":
                     emit_context(
-                        f"Captured RUN/SRC for evidence-producing command as {run['id']}. Refresh brief_current_context and compare the output with working_argument. Extract quote-backed facts with extract_run_claim_candidates only if this taught code behavior, test contract, environment constraint, task outcome, or changed a CLM-* gap.",
+                        f"Captured RUN/SRC for evidence-producing command as {run['id']}. Refresh TEP brief and compare the output with working_argument. Extract quote-backed facts with capture(extract_run_claim_candidates) only if this taught code behavior, test contract, environment constraint, task outcome, or changed a CLM-* gap.",
                         event="PostToolUse",
                     )
                     return 0
                 emit_context(
-                    "Captured RUN/SRC only. Refresh brief_current_context and keep this as evidence unless it changes the working_argument; do not create a mechanical command/commit CLM.",
+                    "Captured RUN/SRC only. Refresh TEP brief and keep this as evidence unless it changes the working_argument; do not create a mechanical command/commit CLM.",
                     event="PostToolUse",
                 )
     return 0
 
 
 def handle_stop(payload: dict) -> int:
+    if stop_hook_active(payload):
+        return 0
     cwd = action_cwd(payload)
     _pointer_path, pointer = find_pointer(cwd)
     wsp = resolve_workspace_ref(pointer, cwd)
     agent_ref = current_agent_ref(pointer, wsp) if pointer and wsp else None
     if pointer and wsp:
         prefix = f"Current TEP agent={agent_ref}. " if agent_ref else ""
-        emit_context(
+        if has_visible_tep_support_summary(last_assistant_message(payload)):
+            return 0
+        emit_stop_block(
             prefix
-            + "Before final answer/task done, refresh brief_current_context and show a compact support summary: "
+            + "Before final answer/task done, refresh TEP brief and show a compact support summary: "
             "CLM refs used, your interpretation of those claims, important SRC/RUN evidence, and remaining gaps. "
-            "Then call final_answer_preflight or task_done_preflight with selected CLM-* support refs.",
-            event="Stop",
+            "Then call finish with selected CLM-* support refs.",
         )
     return 0
 

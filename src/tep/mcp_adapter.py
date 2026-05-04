@@ -23,6 +23,7 @@ class MCPToolSpec:
     description: str
     required: tuple[str, ...] = ()
     optional: tuple[str, ...] = ()
+    public: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class MCPToolSpec:
             "description": self.description,
             "required": list(self.required),
             "optional": list(self.optional),
+            "public": self.public,
         }
 
 
@@ -39,12 +41,92 @@ class MCPAdapter:
     def __init__(self, runtime: Runtime) -> None:
         self.runtime = runtime
         self._tools: dict[str, tuple[MCPToolSpec, Callable[[dict[str, Any]], RuntimeResponse]]] = {
+            "brief": (
+                MCPToolSpec("brief", "brief", False, "Return the current task, context, ledger chain, gaps, and next public moves.", ("workspace_ref",), ("agent_ref",), True),
+                self._brief_current_context,
+            ),
+            "capture": (
+                MCPToolSpec(
+                    "capture",
+                    "capture",
+                    True,
+                    "Capture input, documents, command observations, excerpts, fragments, or extraction candidates.",
+                    ("workspace_ref", "capture_kind"),
+                    ("text", "path", "input_class", "actor_ref", "thread_ref", "evidence_role", "authority_scope", "source_ref", "confirmation_ref", "source_class", "reason", "quote", "locator", "candidates", "run_ref", "stream", "command", "cwd", "exit_code", "stdout", "stderr", "agent_ref", "open_act_ref", "max_chars"),
+                    True,
+                ),
+                self._capture,
+            ),
+            "claim": (
+                MCPToolSpec(
+                    "claim",
+                    "claim",
+                    True,
+                    "Create an atomic CLM-* fact or hypothesis from explicit support refs.",
+                    ("workspace_ref", "statement", "based_on"),
+                    ("claim_kind", "project_refs", "task_refs", "support_refs", "contradiction_refs"),
+                    True,
+                ),
+                self._claim,
+            ),
+            "relate": (
+                MCPToolSpec(
+                    "relate",
+                    "claim",
+                    True,
+                    "Create a relation CLM-* explaining how two claims connect.",
+                    ("workspace_ref", "relation_type", "subject_ref", "object_ref"),
+                    ("statement", "project_refs", "task_refs", "source_refs", "reason", "bridge_scope", "synced_object", "bridge_limits"),
+                    True,
+                ),
+                self._link_claims,
+            ),
+            "reason": (
+                MCPToolSpec(
+                    "reason",
+                    "ledger",
+                    True,
+                    "Append a selected CLM-* snapshot to the current agent reasoning ledger.",
+                    ("workspace_ref", "agent_ref", "agent_private_key", "claim_ref", "why"),
+                    ("difficulty_bits",),
+                    True,
+                ),
+                self._append_ledger,
+            ),
+            "act": (
+                MCPToolSpec(
+                    "act",
+                    "ledger",
+                    True,
+                    "Open, capture, close, or preflight a bounded ACT probe.",
+                    ("workspace_ref", "agent_ref", "agent_private_key", "act_action"),
+                    ("claim_ref", "intent", "allowed_action_kind", "expected_evidence", "scope", "evidence_ref", "summary", "outcome", "reason", "result_ref", "action_kind", "action", "difficulty_bits"),
+                    True,
+                ),
+                self._act,
+            ),
+            "lookup": (
+                MCPToolSpec("lookup", "lookup", False, "Lookup reusable CLM-* facts and trust posture.", ("workspace_ref",), ("query", "task_ref", "limit"), True),
+                self._lookup_facts,
+            ),
+            "finish": (
+                MCPToolSpec(
+                    "finish",
+                    "gate",
+                    False,
+                    "Check final answer, task done, or deferral against the selected CLM support path.",
+                    ("workspace_ref", "finish_kind"),
+                    ("agent_ref", "task_ref", "support_refs", "reason", "resume_condition"),
+                    True,
+                ),
+                self._finish,
+            ),
             "generate_agent_identity": (
-                MCPToolSpec("generate_agent_identity", "identity", False, "Generate an in-memory agent identity.", ()),
+                MCPToolSpec("generate_agent_identity", "identity", False, "Generate an in-memory agent identity.", (), public=True),
                 self._generate_agent_identity,
             ),
             "start_agent_thread": (
-                MCPToolSpec("start_agent_thread", "identity", True, "Bind current thread to an AGENT-* ledger.", ("workspace_ref", "thread_ref", "identity")),
+                MCPToolSpec("start_agent_thread", "identity", True, "Bind current thread to an AGENT-* ledger.", ("workspace_ref", "thread_ref", "identity"), public=True),
                 self._start_agent_thread,
             ),
             "register_project": (
@@ -236,7 +318,7 @@ class MCPAdapter:
         }
 
     def list_tools(self) -> list[dict[str, Any]]:
-        return [spec.as_dict() for spec, _handler in self._tools.values()]
+        return [spec.as_dict() for spec, _handler in self._tools.values() if spec.public]
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         if name not in self._tools:
@@ -436,6 +518,83 @@ class MCPAdapter:
     def _decrypt_sensitive_field(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.decrypt_sensitive_field(args["workspace_ref"], args["record_ref"], args["field"])
 
+    def _capture(self, args: dict[str, Any]) -> RuntimeResponse:
+        kind = str(args["capture_kind"])
+        if kind in {"input", "user_input"}:
+            return self.runtime.capture_input(
+                args["workspace_ref"],
+                text=args["text"],
+                input_class=args.get("input_class", "task_instruction"),
+                actor_ref=args.get("actor_ref", "user"),
+                thread_ref=args.get("thread_ref"),
+                evidence_role=args.get("evidence_role", "assertion"),
+                authority_scope=args.get("authority_scope", "user_supplied_context"),
+            )
+        if kind == "text":
+            return self.runtime.ingest_text(args["workspace_ref"], args["text"], **{key: value for key, value in args.items() if key not in {"workspace_ref", "capture_kind", "text"}})
+        if kind == "file":
+            return self.runtime.ingest_file(args["workspace_ref"], args["path"], **{key: value for key, value in args.items() if key not in {"workspace_ref", "capture_kind", "path"}})
+        if kind in {"bash", "command"}:
+            return self.runtime.capture_bash_command(
+                args["workspace_ref"],
+                command=args["command"],
+                cwd=args["cwd"],
+                exit_code=args["exit_code"],
+                stdout=args.get("stdout", ""),
+                stderr=args.get("stderr", ""),
+                agent_ref=args.get("agent_ref"),
+                open_act_ref=args.get("open_act_ref"),
+            )
+        if kind == "run_output":
+            return self.runtime.capture_run_output_source(args["workspace_ref"], run_ref=args["run_ref"], stream=args.get("stream", "stdout"), quote=args.get("quote"))
+        if kind == "source_excerpt":
+            return self.runtime.capture_source_excerpt(args["workspace_ref"], source_ref=args["source_ref"], quote=args["quote"], locator=args.get("locator"))
+        if kind == "source_fragments":
+            return self.runtime.capture_source_fragments(args["workspace_ref"], source_ref=args["source_ref"], max_chars=args.get("max_chars", 4000))
+        if kind == "extract_claim_candidates":
+            return self.runtime.extract_claim_candidates(args["workspace_ref"], source_ref=args["source_ref"], candidates=args["candidates"])
+        if kind == "extract_run_claim_candidates":
+            return self.runtime.extract_run_claim_candidates(args["workspace_ref"], run_ref=args["run_ref"], candidates=args["candidates"])
+        if kind == "confirm_source":
+            return self.runtime.confirm_source_for_scope(
+                args["workspace_ref"],
+                source_ref=args["source_ref"],
+                confirmation_ref=args["confirmation_ref"],
+                source_class=args["source_class"],
+                authority_scope=args["authority_scope"],
+                reason=args["reason"],
+                actor_ref=args.get("actor_ref", "runtime"),
+            )
+        raise ValueError(f"unsupported capture_kind: {kind}")
+
+    def _claim(self, args: dict[str, Any]) -> RuntimeResponse:
+        based_on = args["based_on"]
+        if not isinstance(based_on, list) or not based_on:
+            raise ValueError("claim.based_on must be a non-empty array of SRC/INP/CLM refs")
+        source_refs = list(args.get("source_refs") or [])
+        support_refs = list(args.get("support_refs") or [])
+        for ref in based_on:
+            if not isinstance(ref, str):
+                raise ValueError("claim.based_on entries must be refs")
+            if ref.startswith(("SRC-", "INP-")):
+                source_refs.append(ref)
+            elif ref.startswith("CLM-"):
+                support_refs.append(ref)
+            elif ref.startswith("RUN-"):
+                raise ValueError("RUN-* must be converted to SRC-* with capture before creating CLM-*")
+            else:
+                raise ValueError(f"unsupported based_on ref: {ref}")
+        return self.runtime.create_claim(
+            args["workspace_ref"],
+            args["statement"],
+            claim_kind=args.get("claim_kind", "other"),
+            project_refs=args.get("project_refs"),
+            task_refs=args.get("task_refs"),
+            source_refs=sorted(set(source_refs)),
+            support_refs=sorted(set(support_refs)),
+            contradiction_refs=args.get("contradiction_refs"),
+        )
+
     def _create_claim(self, args: dict[str, Any]) -> RuntimeResponse:
         payload = dict(args)
         workspace_ref = payload.pop("workspace_ref")
@@ -507,6 +666,18 @@ class MCPAdapter:
             difficulty_bits=args.get("difficulty_bits", 18),
         )
 
+    def _act(self, args: dict[str, Any]) -> RuntimeResponse:
+        action = str(args["act_action"])
+        if action == "open":
+            return self._open_probe(args)
+        if action == "capture":
+            return self._capture_probe_result(args)
+        if action == "close":
+            return self._close_probe(args)
+        if action == "preflight":
+            return self._protected_action_preflight(args)
+        raise ValueError(f"unsupported act_action: {action}")
+
     def _validate_ledger(self, args: dict[str, Any]) -> RuntimeResponse:
         return self.runtime.validate_ledger(args["workspace_ref"], args["agent_ref"])
 
@@ -542,6 +713,26 @@ class MCPAdapter:
             task_ref=args["task_ref"],
             support_refs=args["support_refs"],
         )
+
+    def _finish(self, args: dict[str, Any]) -> RuntimeResponse:
+        kind = str(args["finish_kind"])
+        if kind in {"final", "final_answer"}:
+            return self.runtime.final_answer_preflight(
+                workspace_ref=args["workspace_ref"],
+                agent_ref=args["agent_ref"],
+                support_refs=args.get("support_refs", []),
+                task_ref=args.get("task_ref"),
+            )
+        if kind in {"task_done", "done"}:
+            return self.runtime.task_done_preflight(
+                workspace_ref=args["workspace_ref"],
+                agent_ref=args["agent_ref"],
+                task_ref=args["task_ref"],
+                support_refs=args.get("support_refs", []),
+            )
+        if kind == "defer":
+            return self.runtime.defer_task(args["workspace_ref"], args["task_ref"], reason=args["reason"], resume_condition=args.get("resume_condition"))
+        raise ValueError(f"unsupported finish_kind: {kind}")
 
     @staticmethod
     def _identity(data: dict[str, Any]) -> AgentIdentity:

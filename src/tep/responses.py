@@ -6,6 +6,38 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+PUBLIC_MOVE_TOOL_BY_OPERATION = {
+    "brief_current_context": "brief",
+    "lookup_facts": "lookup",
+    "project_registry_search": "lookup",
+    "create_source": "capture",
+    "ingest_text": "capture",
+    "ingest_file": "capture",
+    "capture_source_excerpt": "capture",
+    "capture_source_fragments": "capture",
+    "extract_claim_candidates": "capture",
+    "confirm_source_for_scope": "capture",
+    "capture_input": "capture",
+    "capture_bash_command": "capture",
+    "capture_run_output_source": "capture",
+    "extract_run_claim_candidates": "capture",
+    "create_claim": "claim",
+    "create_claim_from_evidence": "claim",
+    "link_claims": "relate",
+    "append_ledger": "reason",
+    "validate_ledger": "reason",
+    "open_probe": "act",
+    "protected_action_preflight": "act",
+    "capture_probe_result": "act",
+    "close_probe": "act",
+    "action_pressure": "act",
+    "final_answer_preflight": "finish",
+    "task_done_preflight": "finish",
+    "final_answer": "finish",
+    "defer_task": "finish",
+}
+
+
 @dataclass(frozen=True)
 class RuntimeResponse:
     ok: bool
@@ -35,14 +67,17 @@ class RuntimeResponse:
 
 
 def move(tool: str, operation_kind: str, why: str, *, writes: bool = False, requires_user: bool = False) -> dict[str, Any]:
+    public_tool = PUBLIC_MOVE_TOOL_BY_OPERATION.get(operation_kind)
+    effective_tool = public_tool or tool
     return {
         "priority": 10,
-        "tool": tool,
+        "tool": effective_tool,
         "operation_kind": operation_kind,
         "why": why,
         "writes": writes,
         "requires_user": requires_user,
         "expected_output": "...",
+        "legacy_tool": operation_kind if public_tool else None,
     }
 
 

@@ -1574,6 +1574,7 @@ class Runtime:
             pressure.append(
                 {
                     "level": "medium",
+                    "usefulness": "bookkeeping_observation",
                     "claim_refs": [claim["id"]],
                     "why": "claim reads like execution bookkeeping, not durable system knowledge",
                     "questions": [
@@ -1610,6 +1611,7 @@ class Runtime:
         pressure.append(
             {
                 "level": "medium",
+                "usefulness": "needs_split",
                 "claim_refs": [claim["id"]],
                 "why": "claim appears broad or compound; it may hide several atomic facts or mix observation with inference",
                 "questions": [
@@ -1652,6 +1654,8 @@ class Runtime:
         evidence_leaves: list[str] = []
         bookkeeping_refs: list[str] = []
         gaps: list[dict[str, Any]] = []
+        unsupported_refs: list[str] = []
+        posture_scores: list[int] = []
         if agent_ref:
             for row in self.store.read_jsonl(self.store.ledger_path(workspace_ref, agent_ref))[-12:]:
                 ref = row.get("ref")
@@ -1662,9 +1666,13 @@ class Runtime:
                 except Exception:
                     continue
                 source_refs = claim.get("source_refs", [])
+                trust_posture = self.posture.trust_posture(workspace_ref, claim)
+                posture_scores.append(int(trust_posture.get("trust_score_bps", 0)))
                 evidence_leaves.extend(source_ref for source_ref in source_refs if isinstance(source_ref, str))
                 if self._is_bookkeeping_claim(claim):
                     bookkeeping_refs.append(ref)
+                if not source_refs:
+                    unsupported_refs.append(ref)
                 chain.append(
                     {
                         "ledger_row": row.get("id"),
@@ -1672,16 +1680,15 @@ class Runtime:
                         "claim_ref": ref,
                         "statement": claim.get("statement"),
                         "source_refs": source_refs,
-                        "trust_posture": self.posture.trust_posture(workspace_ref, claim),
+                        "trust_posture": trust_posture,
                     }
                 )
         if active_task is None:
             gaps.append({"code": "no_active_task", "why": "briefing has no active task, so the current argument has no task goal"})
         if not chain:
             gaps.append({"code": "no_ledger_claim_chain", "why": "current agent ledger has no recent CLM-* chain"})
-        unsupported = [item["claim_ref"] for item in chain if not item.get("source_refs")]
-        if unsupported:
-            gaps.append({"code": "unsupported_claims_in_chain", "claim_refs": unsupported[:8], "why": "some chain claims have no evidence leaves"})
+        if unsupported_refs:
+            gaps.append({"code": "unsupported_claims_in_chain", "claim_refs": unsupported_refs[:8], "why": "some chain claims have no evidence leaves"})
         if bookkeeping_refs:
             gaps.append(
                 {
@@ -1695,19 +1702,63 @@ class Runtime:
             selected_missing = [ref for ref in selected_claim_refs if ref not in chain_refs]
             if selected_missing:
                 gaps.append({"code": "selected_claims_not_in_recent_ledger", "claim_refs": selected_missing[:8], "why": "selected claims are not visible in the recent ledger chain"})
+        chain_trust_index = self._chain_trust_index(chain, posture_scores, unsupported_refs, bookkeeping_refs)
         return {
             "current_question": active_task.get("goal") if active_task else None,
             "claim_chain": chain[-8:],
             "evidence_leaves": sorted(set(evidence_leaves))[:12],
             "bookkeeping_claim_refs": bookkeeping_refs[:8],
+            "chain_trust_index": chain_trust_index,
             "gaps": gaps,
-            "reflection_prompt": "Are you still working on this fact chain? If not, update the chain before acting; if yes, explain how the next action will change one CLM-* or close one gap.",
+            "reflection_prompt": self._working_argument_reflection_prompt(chain_trust_index),
             "valid_moves": [
                 move("lookup", "lookup_facts", "Find CLM-* that should be part of the current argument."),
                 move("detail", "record_detail", "Inspect a CLM-* or SRC-* in the current argument."),
                 move("mutate_record", "link_claims", "Connect observations to system facts with explicit relations.", writes=True),
             ],
         }
+
+    @staticmethod
+    def _chain_trust_index(
+        chain: list[dict[str, Any]],
+        posture_scores: list[int],
+        unsupported_refs: list[str],
+        bookkeeping_refs: list[str],
+    ) -> dict[str, Any]:
+        if not chain:
+            return {
+                "score_bps": 0,
+                "label": "empty",
+                "why": "no ledgered CLM-* chain is visible",
+            }
+        score = int(sum(posture_scores) / max(1, len(posture_scores))) if posture_scores else 0
+        score -= min(4000, 1000 * len(unsupported_refs))
+        score -= min(3000, 1000 * len(bookkeeping_refs))
+        score = max(0, min(10000, score))
+        if score >= 7000:
+            label = "usable"
+        elif score >= 3500:
+            label = "weak"
+        else:
+            label = "low"
+        why_parts = []
+        if unsupported_refs:
+            why_parts.append("unsupported claims are present")
+        if bookkeeping_refs:
+            why_parts.append("bookkeeping claims are present")
+        if not why_parts:
+            why_parts.append("based on current trust posture and ledger support")
+        return {
+            "score_bps": score,
+            "label": label,
+            "why": "; ".join(why_parts),
+        }
+
+    @staticmethod
+    def _working_argument_reflection_prompt(chain_trust_index: dict[str, Any]) -> str:
+        if chain_trust_index.get("label") in {"empty", "low"}:
+            return "Your ledger shape may be formally valid but weak. Before acting, name the CLM-* you rely on, the evidence leaf behind it, and the gap the next action will close."
+        return "Are you still working on this fact chain? If not, update the chain before acting; if yes, explain how the next action will change one CLM-* or close one gap."
 
     def _read_record(self, workspace_ref: str, record_ref: str) -> dict[str, Any]:
         if record_ref.startswith("CLM-"):
