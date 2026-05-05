@@ -895,7 +895,7 @@ class CoreTests(unittest.TestCase):
             self.assertIsNone(closed.ledger_pressure["open_act"])
             self.assertTrue(closed.ledger_pressure["ledger_valid"])
 
-    def test_open_probe_rejects_broad_or_observation_only_claim_targets(self) -> None:
+    def test_open_probe_warns_for_broad_or_observation_only_claim_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TEPHome(tmp)
             runtime = Runtime(store)
@@ -930,9 +930,20 @@ class CoreTests(unittest.TestCase):
                 expected_evidence="command output",
                 difficulty_bits=8,
             )
-            self.assertFalse(broad_act.ok)
-            self.assertEqual(broad_act.error["code"], "act_target_too_broad")
-            self.assertIn("create_claim", {move["operation_kind"] for move in broad_act.repair_options})
+            self.assertTrue(broad_act.ok, broad_act.error)
+            self.assertEqual(broad_act.data["ledger_row"]["kind"], "act")
+            self.assertTrue(broad_act.act_pressure)
+            self.assertIn("broad", broad_act.act_pressure[0]["why"])
+            self.assertIn("create_claim", {move["operation_kind"] for move in broad_act.act_pressure[0]["valid_moves"]})
+            runtime.close_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=broad["id"],
+                outcome="no_relevant_evidence",
+                reason="Close broad probe before testing observation-only pressure.",
+                difficulty_bits=8,
+            )
 
             run = runtime.capture_bash_command(workspace["id"], command="pytest -q", cwd=tmp, exit_code=1, stdout="1 failed\n").data["run"]
             source = runtime.capture_run_output_source(workspace["id"], run_ref=run["id"], stream="stdout").data["source"]
@@ -956,8 +967,10 @@ class CoreTests(unittest.TestCase):
                 expected_evidence="command output",
                 difficulty_bits=8,
             )
-            self.assertFalse(observation_act.ok)
-            self.assertIn("act_target_observation_only", observation_act.error["message"])
+            self.assertTrue(observation_act.ok, observation_act.error)
+            self.assertEqual(observation_act.data["ledger_row"]["kind"], "act")
+            self.assertTrue(observation_act.act_pressure)
+            self.assertIn("runtime observation", observation_act.act_pressure[0]["why"])
 
     def test_open_probe_allows_retry_probe_claim_from_runtime_observation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3576,7 +3589,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.6")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.7")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3641,7 +3654,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.6")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.7")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3659,7 +3672,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.6")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.7")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

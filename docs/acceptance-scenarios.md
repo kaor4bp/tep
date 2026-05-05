@@ -569,6 +569,9 @@ Agent opens ACT, runs inspection/test, captures output, creates observation
 
 Expected:
 
+- broad or observation-only target claims do not block ACT by themselves;
+  successful responses include `act_pressure` and valid moves for extracting
+  narrow durable facts from the result
 - command output becomes source-backed only after capture
 - `RUN-*` is recorded and linked to the open ACT
 - observation enters claim graph

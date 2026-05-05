@@ -1045,7 +1045,7 @@ class Runtime:
     ) -> RuntimeResponse:
         def op() -> RuntimeResponse:
             self._require_task_context_ready(workspace_ref, agent_ref)
-            self._validate_act_target_claim(workspace_ref, claim_ref)
+            act_pressure = self._act_target_pressure(workspace_ref, claim_ref)
             ledger = Ledger(self.store, workspace_ref, agent_ref)
             result = ledger.open_probe(
                 private_key=private_key,
@@ -1060,6 +1060,7 @@ class Runtime:
             return ok_response(
                 {"ledger_row": result.row, "validation": ledger.validate(include_source_evidence=False).__dict__},
                 ledger_pressure=self._ledger_pressure(workspace_ref, agent_ref),
+                act_pressure=act_pressure,
                 valid_moves=[
                     move("probe_step", "capture_probe_result", "Capture observed evidence for the open ACT.", writes=True),
                     move("probe_step", "close_probe", "Close the ACT with a result or no-update reason.", writes=True),
@@ -1497,16 +1498,6 @@ class Runtime:
                         move("mutate_record", "compile_context_pack", "Recompile the missing or stale task context pack.", writes=True),
                     ],
                 )
-            if message == "act_target_too_broad":
-                return error_response(
-                    "act_target_too_broad",
-                    "ACT target claim is too broad; create a narrow probe-specific CLM-* for the exact command/check you want to run",
-                    repair_options=[
-                        move("mutate_record", "create_claim", "Create a narrow CLM-* such as 'verify collect-only for test X'.", writes=True),
-                        move("append_ledger", "append_ledger", "Snapshot the narrow CLM-* before opening ACT.", writes=True),
-                        move("probe_step", "open_probe", "Open ACT against the narrow probe claim.", writes=True),
-                    ],
-                )
             if message == "needs_claim_snapshot":
                 return error_response(
                     "needs_claim_snapshot",
@@ -1520,20 +1511,44 @@ class Runtime:
         except TEPError as exc:
             return error_response("protocol_error", str(exc), repair_options=[move("validate", "validate_ledger", "Validate current protocol state.")])
 
-    def _validate_act_target_claim(self, workspace_ref: str, claim_ref: str) -> None:
+    def _act_target_pressure(self, workspace_ref: str, claim_ref: str) -> list[dict[str, Any]]:
         claim = self.store.read_claim(workspace_ref, claim_ref)
         retry_probe = self._is_retry_probe_claim(claim)
+        pressure: list[dict[str, Any]] = []
         if self._claim_analysis_pressure(claim) and not retry_probe:
-            raise ValidationError("act_target_too_broad")
+            pressure.append(
+                {
+                    "level": "medium",
+                    "claim_refs": [claim_ref],
+                    "why": "ACT target claim is broad; keep the action bounded and extract narrower CLM-* from the result",
+                    "valid_moves": [
+                        move("probe_step", "capture_probe_result", "Capture exact evidence produced by this ACT.", writes=True),
+                        move("mutate_record", "create_claim", "After the ACT, create a narrow durable CLM-* from the useful evidence.", writes=True),
+                        move("mutate_record", "link_claims", "Relate the narrow CLM-* back to the broader working claim.", writes=True),
+                    ],
+                }
+            )
         source_refs = claim.get("source_refs", [])
         if not source_refs:
-            return
+            return pressure
         sources = [self.store.read_source(workspace_ref, source_ref) for source_ref in source_refs]
         source_classes = {source.get("classification", {}).get("source_class") for source in sources}
         source_kinds = {source.get("source_kind") for source in sources}
         observation_only = source_classes.issubset({"runtime_observation", "test_or_check"}) or source_kinds.issubset({"command_output", "command_summary"})
         if observation_only and not retry_probe and not claim.get("relation") and not claim.get("support_refs"):
-            raise ValidationError("act_target_observation_only")
+            pressure.append(
+                {
+                    "level": "medium",
+                    "claim_refs": [claim_ref],
+                    "why": "ACT target is based only on runtime observation; use the probe to learn a durable system fact, not to repeat bookkeeping",
+                    "valid_moves": [
+                        move("probe_step", "capture_probe_result", "Capture the new run output or artifact.", writes=True),
+                        move("mutate_record", "create_claim", "Create a system-behavior CLM-* if the probe teaches something.", writes=True),
+                        move("mutate_record", "link_claims", "Link runtime observation as support/challenge instead of final proof.", writes=True),
+                    ],
+                }
+            )
+        return pressure
 
     @staticmethod
     def _is_retry_probe_claim(claim: dict[str, Any]) -> bool:

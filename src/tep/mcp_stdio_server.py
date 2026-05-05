@@ -19,7 +19,7 @@ from .runtime import Runtime
 from .storage import TEPHome
 
 
-SERVER_VERSION = "0.7.6"
+SERVER_VERSION = "0.7.7"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 

@@ -584,11 +584,12 @@ capture as `SRC-*`, or write to `RUN-*`.
 
 Required input includes target claim/relation refs, intent, allowed action kind,
 scope, expected evidence, and the same explicit in-memory signing parameter.
-The target must be a narrow current action intent or probe hypothesis, not a
-broad historical run summary or pure runtime/command observation. Broad targets
-return `act_target_too_broad`; pure observation targets return
-`act_target_observation_only`. A narrow retry claim may cite the previous
-failed/unfinished attempt if it names the bounded next check to try again.
+The target should be a narrow current action intent or probe hypothesis. Broad
+historical summaries and pure runtime/command observations are not hard ACT
+blockers, but successful responses return `act_pressure` telling the agent to
+keep the action bounded and extract a narrower durable `CLM-*` from the result.
+A narrow retry claim may cite the previous failed/unfinished attempt if it
+names the bounded next check to try again.
 
 `protected_action_preflight`
 : Optionally validate that a protected action matches the current open ACT in a
