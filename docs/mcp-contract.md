@@ -553,6 +553,9 @@ supporting claim.
 when trusted facts form a stable repeated cluster that agents keep rediscovering.
 Compiled claims use aggregate dedup keys over compiled kind, query/intent,
 source set hash, underlying refs, and input policy.
+Aggregate trust posture is computed from the underlying `CLM-*` posture. It
+must expose weakest refs and limits, and it must not promote runtime-only or
+contradicted leaves into trusted proof by summary wording alone.
 
 `select_existing_claim`
 : Resolve duplicate pressure by selecting an existing `CLM-*` instead of

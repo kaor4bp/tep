@@ -916,7 +916,7 @@ class Runtime:
             claim = self.store.create_claim(workspace_ref, statement, **kwargs)
             invalidated_context_refs = self._context_invalidated_by_claim(workspace_ref, claim["id"])
             source_pressure = []
-            if not claim.get("source_refs"):
+            if not claim.get("source_refs") and claim.get("claim_form") != "aggregate":
                 source_pressure.append(
                     {
                         "level": "medium",
@@ -1566,7 +1566,7 @@ class Runtime:
 
     def _claim_analysis_pressure(self, claim: dict[str, Any]) -> list[dict[str, Any]]:
         statement = str(claim.get("statement") or "")
-        if not statement.strip() or claim.get("relation"):
+        if not statement.strip() or claim.get("relation") or claim.get("claim_form") == "aggregate":
             return []
         normalized = " ".join(statement.split())
         pressure: list[dict[str, Any]] = []
@@ -1852,6 +1852,8 @@ class Runtime:
             score -= 2000
         if claim.get("source_refs"):
             score += 1000
+        if claim.get("claim_form") == "aggregate":
+            score += 500
         return score
 
     def _final_gate(

@@ -432,8 +432,9 @@ Aggregated and compiled records are still `CLM-*` records with
 record types. A model or flow is a compiled claim over trusted lower-level
 claims.
 
-They are created only by runtime compilation operations, not by a curator role
-and not as free-form agent thoughts.
+They are created by typed runtime operations, not by a curator role and not as
+free-form agent thoughts. An agent may request an aggregate only by naming the
+underlying `CLM-*` set and the limits of the summary.
 
 An aggregate or compiled claim must include reproducible metadata:
 
@@ -444,6 +445,8 @@ An aggregate or compiled claim must include reproducible metadata:
     "source_set_hash": "sha256:...",
     "sample_refs": ["CLM-*"],
     "underlying_refs": ["CLM-*"],
+    "limits": "only the scope this aggregate claims to summarize",
+    "method": "agent_synthesis|runtime_compilation",
     "ledger_snapshot_refs": ["CLM-*@rev"],
     "generated_by": "runtime",
     "generated_at": "iso8601"
@@ -462,6 +465,21 @@ Compiled model/flow claims are useful because they give the agent a compact
 working picture, but they do not replace underlying object-level `CLM/SRC` in
 proof paths. A compiled claim becomes stale when the source set, underlying
 claims, trust posture, contradiction pressure, or ledger snapshots change.
+
+Aggregate trust is runtime-derived from the underlying claim graph. It is not
+stored on the aggregate and it cannot override weak leaves:
+
+- an aggregate must name at least two visible `underlying_refs`;
+- `support_refs` include those underlying claims;
+- `limits` is required so the summary does not silently widen scope;
+- trust score is bounded by the weakest/average underlying trust, with pressure
+  from contradictions and runtime-only leaves;
+- a runtime-only aggregate remains hypothesis-level even if it summarizes many
+  runtime observations;
+- a trusted aggregate requires trusted/user-confirmed underlying support and no
+  unresolved contradiction pressure;
+- aggregate posture exposes weakest refs so the agent can strengthen the chain
+  instead of treating the aggregate as magic proof.
 
 Compilation rules:
 

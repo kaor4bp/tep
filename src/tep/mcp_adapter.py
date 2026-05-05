@@ -74,9 +74,9 @@ class MCPAdapter:
                     "claim",
                     "claim",
                     True,
-                    "Create an atomic CLM-* fact or hypothesis from explicit support refs.",
+                    "Create an atomic or aggregate CLM-* fact/hypothesis from explicit support refs.",
                     ("workspace_ref", "statement", "based_on"),
-                    ("claim_kind", "project_refs", "task_refs", "support_refs", "contradiction_refs"),
+                    ("claim_form", "claim_kind", "project_refs", "task_refs", "support_refs", "contradiction_refs", "aggregation"),
                     True,
                 ),
                 self._claim,
@@ -636,12 +636,14 @@ class MCPAdapter:
         return self.runtime.create_claim(
             args["workspace_ref"],
             args["statement"],
+            claim_form=args.get("claim_form", "assertion"),
             claim_kind=args.get("claim_kind", "other"),
             project_refs=args.get("project_refs"),
             task_refs=args.get("task_refs"),
             source_refs=sorted(set(source_refs)),
             support_refs=sorted(set(support_refs)),
             contradiction_refs=args.get("contradiction_refs"),
+            aggregation=args.get("aggregation"),
         )
 
     def _create_claim(self, args: dict[str, Any]) -> RuntimeResponse:

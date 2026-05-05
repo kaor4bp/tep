@@ -1877,6 +1877,132 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(posture["inference_posture"]["kind"], "unclassified")
             self.assertTrue(detail.source_pressure)
 
+    def test_aggregate_claim_requires_two_underlying_refs_and_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            first = runtime.create_claim(workspace["id"], "First leaf claim.").data["claim"]
+
+            missing_limit = runtime.create_claim(
+                workspace["id"],
+                "Aggregate without limits.",
+                claim_form="aggregate",
+                support_refs=[first["id"]],
+                aggregation={"underlying_refs": [first["id"]]},
+            )
+
+            self.assertFalse(missing_limit.ok)
+            self.assertIn("aggregate_requires_two_underlying_refs", missing_limit.error["message"])
+
+    def test_aggregate_claim_trust_is_derived_from_underlying_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            doc_source = runtime.create_source(
+                workspace["id"],
+                source_kind="file_quote",
+                quote="The retry limit is three attempts.",
+                critique_status="accepted",
+                classification={
+                    "source_class": "first_party_project",
+                    "document_kind": "project_doc",
+                    "evidence_role": "theory",
+                    "authority_scope": "project_behavior",
+                    "independence_key": "doc:retry",
+                },
+            ).data["source"]
+            runtime_source = runtime.create_source(
+                workspace["id"],
+                source_kind="command_output",
+                quote="pytest observed retry behavior once.",
+                critique_status="accepted",
+                classification={
+                    "source_class": "runtime_observation",
+                    "document_kind": "command_output",
+                    "evidence_role": "observation",
+                    "authority_scope": "local_runtime",
+                    "independence_key": "run:pytest",
+                },
+            ).data["source"]
+            trusted = runtime.create_claim(workspace["id"], "Retry limit is three attempts.", source_refs=[doc_source["id"]]).data["claim"]
+            observed = runtime.create_claim(workspace["id"], "A local pytest run observed retry behavior once.", source_refs=[runtime_source["id"]]).data["claim"]
+
+            aggregate = runtime.create_claim(
+                workspace["id"],
+                "Retry behavior summary for this task.",
+                claim_form="aggregate",
+                claim_kind="summary",
+                support_refs=[trusted["id"], observed["id"]],
+                aggregation={
+                    "underlying_refs": [trusted["id"], observed["id"]],
+                    "limits": "Only summarizes retry behavior described by the cited leaves.",
+                },
+            )
+
+            self.assertTrue(aggregate.ok, aggregate.error)
+            aggregate_claim = aggregate.data["claim"]
+            self.assertEqual(aggregate_claim["claim_form"], "aggregate")
+            self.assertEqual(aggregate_claim["support_refs"], [trusted["id"], observed["id"]])
+
+            detail = runtime.record_detail(workspace["id"], aggregate_claim["id"])
+            posture = detail.data["detail"]["trust_posture"]
+            trusted_posture = runtime.record_detail(workspace["id"], trusted["id"]).data["detail"]["trust_posture"]
+            self.assertEqual(posture["derived_label"], "aggregate_needs_theory_support")
+            self.assertLess(posture["trust_score_bps"], trusted_posture["trust_score_bps"])
+            self.assertEqual(posture["aggregate"]["underlying_refs"], [trusted["id"], observed["id"]])
+            self.assertEqual(posture["aggregate"]["weakest_refs"], [observed["id"]])
+            self.assertNotIn("answer", posture["usable_for"])
+
+    def test_aggregate_claim_from_trusted_leaves_is_answer_usable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            first_source = runtime.create_source(
+                workspace["id"],
+                source_kind="file_quote",
+                quote="Service A owns retry configuration.",
+                critique_status="accepted",
+                classification={
+                    "source_class": "first_party_project",
+                    "document_kind": "source_code",
+                    "evidence_role": "implementation",
+                    "authority_scope": "implementation_detail",
+                    "independence_key": "repo:service-a",
+                },
+            ).data["source"]
+            second_source = runtime.create_source(
+                workspace["id"],
+                source_kind="file_quote",
+                quote="Service A retry configuration is documented.",
+                critique_status="accepted",
+                classification={
+                    "source_class": "official_doc",
+                    "document_kind": "project_doc",
+                    "evidence_role": "documentation",
+                    "authority_scope": "project_behavior",
+                    "independence_key": "doc:service-a",
+                },
+            ).data["source"]
+            first = runtime.create_claim(workspace["id"], "Service A owns retry configuration.", source_refs=[first_source["id"]]).data["claim"]
+            second = runtime.create_claim(workspace["id"], "Service A retry configuration is documented.", source_refs=[second_source["id"]]).data["claim"]
+
+            aggregate = runtime.create_claim(
+                workspace["id"],
+                "Service A retry configuration summary.",
+                claim_form="aggregate",
+                claim_kind="summary",
+                support_refs=[first["id"], second["id"]],
+                aggregation={
+                    "underlying_refs": [first["id"], second["id"]],
+                    "limits": "Only covers Service A retry configuration.",
+                },
+            ).data["claim"]
+
+            posture = runtime.record_detail(workspace["id"], aggregate["id"]).data["detail"]["trust_posture"]
+            self.assertEqual(posture["derived_label"], "trusted_aggregate")
+            self.assertIn("answer", posture["usable_for"])
+            self.assertIn("protected_action", posture["usable_for"])
+
     def test_ingest_text_creates_typed_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Runtime(TEPHome(tmp))
@@ -3347,7 +3473,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.3")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.4")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3358,6 +3484,9 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("append_ledger", tool_names)
             capture_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "capture")
             self.assertIn("source_ref", capture_tool["inputSchema"]["properties"])
+            claim_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "claim")
+            self.assertEqual(claim_tool["inputSchema"]["properties"]["aggregation"]["type"], "object")
+            self.assertIn("claim_form", claim_tool["inputSchema"]["properties"])
 
             called = server.handle_message(
                 {
@@ -3409,7 +3538,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.3")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.4")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3427,7 +3556,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.3")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.4")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

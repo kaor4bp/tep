@@ -52,7 +52,8 @@ Public agent tools are intentionally small:
   fragments, or extraction candidates as evidence.
 - `task`: create/attach/decompose/defer tasks and compile/list/revoke task
   context packs.
-- `claim`: register one atomic `CLM-*` from explicit `based_on` refs.
+- `claim`: register one atomic or aggregate `CLM-*` from explicit `based_on`
+  refs.
 - `relate`: create a relation `CLM-*` explaining support, contradiction,
   applicability, dependency, freshness, or equivalence.
 - `reason`: append a selected `CLM-*` into the long-term reasoning ledger.
@@ -278,6 +279,11 @@ Use this mental model:
 - Relation: a `CLM-*` edge explaining how claims connect: support,
   contradiction, dependency, applicability, equivalence, duplicate, induction,
   deduction, abduction, assumption, possible relation, or freshness challenge.
+- Aggregate: a `CLM-*` with `claim_form="aggregate"` that summarizes a group of
+  existing `CLM-*` records to reduce repeated lookup/token load. It must name
+  `aggregation.underlying_refs` and `aggregation.limits`. Its trust is computed
+  from the underlying claims; it cannot make weak leaves trusted by wording the
+  summary confidently.
 
 When you learn something, ask:
 
@@ -293,6 +299,9 @@ Rules:
 - A runtime-only claim remains hypothesis-like even if repeated many times.
 - User confirmation, documents, theory, or observed sources can improve trust.
 - Do not build a hypothesis on an unsupported hypothesis.
+- Use aggregates when several stable point facts are repeatedly needed in the
+  same task, but keep their limits narrow and inspect `aggregate.weakest_refs`
+  before relying on them.
 - To challenge a trusted fact, create an alternate probe branch; do not silently
   discard the trusted fact.
 - Use `relate` for support, contradiction, applicability, dependency,
@@ -420,6 +429,15 @@ When `claim_pressure` asks analysis questions, answer them by creating narrower
 claim. Do not hide observations, inference, applicability, and uncertainty in a
 single heavy statement. If `claim_pressure` says a CLM looks like execution
 bookkeeping, use it as evidence, not as the center of the argument.
+
+When lookup/briefing returns many related point facts, reduce token load by
+creating or reusing a narrow aggregate `CLM-*`:
+
+- Use only visible underlying `CLM-*` refs, normally facts you already inspected.
+- Include `aggregation.limits` in plain language.
+- Treat the aggregate as a compact handle for the chain, not as stronger proof.
+- If `trust_posture.aggregate.weakest_refs` names weak leaves, strengthen those
+  leaves with sources or relations before final/protected reliance.
 
 Good default loop:
 

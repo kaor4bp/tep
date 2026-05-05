@@ -877,15 +877,20 @@ class TEPHome:
         support_refs: list[str] | None = None,
         contradiction_refs: list[str] | None = None,
         relation: dict[str, Any] | None = None,
+        aggregation: dict[str, Any] | None = None,
         tx: FileTransaction | None = None,
     ) -> dict[str, Any]:
         self.ensure_workspace(workspace_ref)
         self._validate_claim_source_refs(workspace_ref, source_refs or [])
+        support_refs = support_refs or []
+        contradiction_refs = contradiction_refs or []
+        aggregation = self._validate_aggregation(workspace_ref, claim_form=claim_form, aggregation=aggregation, support_refs=support_refs)
         claim_ref = new_id("CLM")
         dedup_key = canonical_hash(
             {
                 "claim_form": claim_form,
                 "claim_kind": claim_kind,
+                "aggregation": aggregation,
                 "relation": relation,
                 "scope": {
                     "workspace_ref": workspace_ref,
@@ -906,9 +911,10 @@ class TEPHome:
             "statement": statement,
             "dedup_key": dedup_key,
             "source_refs": source_refs or [],
-            "support_refs": support_refs or [],
-            "contradiction_refs": contradiction_refs or [],
+            "support_refs": support_refs,
+            "contradiction_refs": contradiction_refs,
             "relation": relation,
+            "aggregation": aggregation,
             "scope": {
                 "workspace_ref": workspace_ref,
                 "workspace_refs": [workspace_ref],
@@ -937,6 +943,45 @@ class TEPHome:
             source = self.read_source(workspace_ref, source_ref)
             if self._source_requires_excerpt(source):
                 raise ValidationError(f"document_source_requires_excerpt:{source_ref}")
+
+    def _validate_aggregation(
+        self,
+        workspace_ref: str,
+        *,
+        claim_form: str,
+        aggregation: dict[str, Any] | None,
+        support_refs: list[str],
+    ) -> dict[str, Any] | None:
+        if claim_form != "aggregate":
+            if aggregation is not None:
+                raise ValidationError("aggregation_requires_claim_form_aggregate")
+            return None
+        if not isinstance(aggregation, dict):
+            raise ValidationError("aggregate_requires_aggregation")
+        underlying_refs = aggregation.get("underlying_refs")
+        if not isinstance(underlying_refs, list) or len(underlying_refs) < 2:
+            raise ValidationError("aggregate_requires_two_underlying_refs")
+        normalized_refs = []
+        for ref in underlying_refs:
+            if not isinstance(ref, str) or not ref.startswith("CLM-"):
+                raise ValidationError("aggregate_underlying_ref_must_be_claim")
+            claim = self.read_claim(workspace_ref, ref)
+            if not self.claim_visible_in_workspace(workspace_ref, claim):
+                raise ValidationError(f"aggregate_underlying_not_visible:{ref}")
+            normalized_refs.append(ref)
+        if len(set(normalized_refs)) != len(normalized_refs):
+            raise ValidationError("aggregate_underlying_refs_must_be_unique")
+        limits = str(aggregation.get("limits") or "").strip()
+        if not limits:
+            raise ValidationError("aggregate_requires_limits")
+        for ref in normalized_refs:
+            if ref not in support_refs:
+                support_refs.append(ref)
+        result = dict(aggregation)
+        result["underlying_refs"] = normalized_refs
+        result["limits"] = limits
+        result.setdefault("method", "agent_synthesis")
+        return result
 
     @staticmethod
     def _source_requires_excerpt(source: dict[str, Any]) -> bool:
@@ -1405,6 +1450,7 @@ class TEPHome:
             "support_refs": record["support_refs"],
             "contradiction_refs": record["contradiction_refs"],
             "relation": record["relation"],
+            "aggregation": record.get("aggregation"),
             "scope": record["scope"],
         }
 

@@ -479,6 +479,9 @@ Expected:
 - the selected compilation move writes a `CLM-*` with `claim_form=aggregate`
 - `compilation.compiled_kind` is `summary`, `model`, or `flow`
 - no public `MODEL-*` or `FLOW-*` record is created
+- aggregate trust posture is derived from the underlying `CLM-*` set, not from
+  the aggregate statement alone
+- the aggregate response exposes weakest underlying refs and limits
 
 Agent tries to compile a model/flow from runtime-only hypotheses.
 
@@ -489,6 +492,28 @@ Expected:
   hypotheses
 - blocked response returns valid recovery choices, such as source capture, user
   confirmation, relation creation, or deferral
+
+Agent creates an aggregate over one trusted fact and one runtime-only
+observation.
+
+Expected:
+
+- the aggregate can be created when it names both underlying refs and explicit
+  limits
+- its trust score is lower than the trusted leaf because the weak leaf remains
+  visible
+- it is usable for exploration/probes but not final answer support until the
+  weak leaf is strengthened or the answer marks the uncertainty
+
+Agent creates an aggregate over trusted/user-confirmed leaves.
+
+Expected:
+
+- runtime may return `trusted_aggregate`
+- final/protected gates still validate the ledger snapshots and source support
+  for the underlying chain
+- contradictions or stale underlying claims lower or invalidate aggregate
+  posture
 
 Underlying claims for a compiled model/flow change.
 

@@ -12,6 +12,12 @@ class PostureService:
         self.store = store
 
     def trust_posture(self, workspace_ref: str, claim: dict[str, Any]) -> dict[str, Any]:
+        return self._trust_posture(workspace_ref, claim, seen=set())
+
+    def _trust_posture(self, workspace_ref: str, claim: dict[str, Any], *, seen: set[str]) -> dict[str, Any]:
+        if claim.get("claim_form") == "aggregate":
+            return self._aggregate_trust_posture(workspace_ref, claim, seen=seen)
+
         source_refs = claim.get("source_refs", [])
         sources = [self.store.read_source(workspace_ref, source_ref) for source_ref in source_refs]
         accepted = [source for source in sources if source.get("critique_status") == "accepted"]
@@ -76,6 +82,143 @@ class PostureService:
             "freshness_pressure": {"level": "none", "challenge_refs": [], "why": ""},
             "contradiction_pressure_bps": 9000 if contradiction_count else 0,
             "usable_for": usable_for,
+        }
+
+    def _aggregate_trust_posture(self, workspace_ref: str, claim: dict[str, Any], *, seen: set[str]) -> dict[str, Any]:
+        claim_ref = claim["id"]
+        aggregation = claim.get("aggregation") or {}
+        underlying_refs = [ref for ref in aggregation.get("underlying_refs", []) if isinstance(ref, str)]
+        contradiction_count = len(claim.get("contradiction_refs", []))
+
+        if claim_ref in seen:
+            return self._aggregate_fallback_posture(claim, "aggregate_cycle", underlying_refs, contradiction_count)
+        if len(underlying_refs) < 2:
+            return self._aggregate_fallback_posture(claim, "aggregate_missing_underlying", underlying_refs, contradiction_count)
+
+        seen = {*seen, claim_ref}
+        underlying_postures: dict[str, dict[str, Any]] = {}
+        for ref in underlying_refs:
+            try:
+                underlying = self.store.read_claim(workspace_ref, ref)
+            except Exception:  # noqa: BLE001 - posture must stay diagnostic for damaged stores.
+                return self._aggregate_fallback_posture(claim, f"aggregate_unreadable_underlying:{ref}", underlying_refs, contradiction_count)
+            underlying_postures[ref] = self._trust_posture(workspace_ref, underlying, seen=seen)
+
+        scores = {ref: int(posture.get("trust_score_bps", 0)) for ref, posture in underlying_postures.items()}
+        weakest_score = min(scores.values())
+        average_score = sum(scores.values()) // len(scores)
+        low_support_count = sum(1 for score in scores.values() if score < 5000)
+        contested_refs = [
+            ref
+            for ref, posture in underlying_postures.items()
+            if posture.get("derived_label") in {"contested", "contested_aggregate"} or int(posture.get("contradiction_pressure_bps", 0)) > 0
+        ]
+        theory_support_count = sum(int(posture.get("theory_support_count", 0)) for posture in underlying_postures.values())
+        runtime_support_count = sum(int(posture.get("runtime_support_count", 0)) for posture in underlying_postures.values())
+        user_confirmed = any(posture.get("user_confirmation") == "confirmed_hypothesis" for posture in underlying_postures.values())
+
+        score = min(average_score, weakest_score + 500)
+        if low_support_count:
+            score -= min(1500, 500 * low_support_count)
+        if contradiction_count or contested_refs:
+            score -= 2000
+        score = max(0, min(10000, score))
+
+        common_usable = set.intersection(*(set(posture.get("usable_for", [])) for posture in underlying_postures.values()))
+        if score < 6000:
+            common_usable.discard("answer")
+            common_usable.discard("protected_action")
+        if score < 7500:
+            common_usable.discard("protected_action")
+        if not common_usable:
+            common_usable = {"exploration"}
+
+        if contradiction_count or contested_refs:
+            label = "contested_aggregate"
+        elif theory_support_count and score >= 7000 and "answer" in common_usable:
+            label = "trusted_aggregate"
+        elif user_confirmed and score >= 6000:
+            label = "user_confirmed_aggregate"
+        elif runtime_support_count:
+            label = "aggregate_needs_theory_support"
+        else:
+            label = "aggregate_hypothesis"
+
+        missing = sorted({item for posture in underlying_postures.values() for item in posture.get("source_diversity", {}).get("missing", [])})
+        weakest_refs = [ref for ref, score_value in scores.items() if score_value == weakest_score]
+        independence_keys = sorted(
+            {
+                key
+                for posture in underlying_postures.values()
+                for key in posture.get("source_diversity", {}).get("independence_keys", [])
+            }
+        )
+
+        return {
+            "claim_ref": claim_ref,
+            "ledger_snapshot": None,
+            "trust_score_bps": score,
+            "derived_label": label,
+            "inference_posture": self.inference_posture(claim),
+            "runtime_support_count": runtime_support_count,
+            "theory_support_count": theory_support_count,
+            "user_confirmation": "confirmed_hypothesis" if user_confirmed else "none",
+            "source_diversity": {
+                "accepted_source_count": sum(int(posture.get("source_diversity", {}).get("accepted_source_count", 0)) for posture in underlying_postures.values()),
+                "independent_source_class_count": len(independence_keys),
+                "independence_keys": independence_keys,
+                "missing": missing,
+            },
+            "freshness_pressure": {"level": "none", "challenge_refs": [], "why": ""},
+            "contradiction_pressure_bps": 9000 if contradiction_count or contested_refs else 0,
+            "usable_for": sorted(common_usable),
+            "aggregate": {
+                "underlying_refs": underlying_refs,
+                "underlying_count": len(underlying_refs),
+                "underlying_scores": scores,
+                "weakest_refs": weakest_refs,
+                "contested_refs": contested_refs,
+                "limits": aggregation.get("limits"),
+                "method": aggregation.get("method", "agent_synthesis"),
+                "why": "aggregate trust is derived from underlying CLM trust; it does not override weak support",
+            },
+        }
+
+    def _aggregate_fallback_posture(
+        self,
+        claim: dict[str, Any],
+        why: str,
+        underlying_refs: list[str],
+        contradiction_count: int,
+    ) -> dict[str, Any]:
+        return {
+            "claim_ref": claim["id"],
+            "ledger_snapshot": None,
+            "trust_score_bps": 500,
+            "derived_label": "contested_aggregate" if contradiction_count else "aggregate_hypothesis",
+            "inference_posture": self.inference_posture(claim),
+            "runtime_support_count": 0,
+            "theory_support_count": 0,
+            "user_confirmation": "none",
+            "source_diversity": {
+                "accepted_source_count": 0,
+                "independent_source_class_count": 0,
+                "independence_keys": [],
+                "missing": ["valid_underlying_claims"],
+            },
+            "freshness_pressure": {"level": "none", "challenge_refs": [], "why": ""},
+            "contradiction_pressure_bps": 9000 if contradiction_count else 0,
+            "usable_for": ["exploration"],
+            "aggregate": {
+                "underlying_refs": underlying_refs,
+                "underlying_count": len(underlying_refs),
+                "underlying_scores": {},
+                "weakest_refs": underlying_refs,
+                "contested_refs": [],
+                "limits": (claim.get("aggregation") or {}).get("limits"),
+                "method": (claim.get("aggregation") or {}).get("method", "agent_synthesis"),
+                "why": why,
+            },
         }
 
     @staticmethod
