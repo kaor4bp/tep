@@ -436,6 +436,9 @@ creating or reusing a narrow aggregate `CLM-*`:
 - Use only visible underlying `CLM-*` refs, normally facts you already inspected.
 - Include `aggregation.limits` in plain language.
 - Treat the aggregate as a compact handle for the chain, not as stronger proof.
+- Expect lookup to prefer aggregates over matching children. Expand
+  `aggregate_drilldown.underlying_refs` with `record_detail` when you need leaf
+  evidence, weakest refs, or exact quotes.
 - If `trust_posture.aggregate.weakest_refs` names weak leaves, strengthen those
   leaves with sources or relations before final/protected reliance.
 

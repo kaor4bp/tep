@@ -1255,7 +1255,7 @@ class Runtime:
             claims = self.store.claims(workspace_ref)
             if query:
                 needle = query.casefold()
-                claims = [claim for claim in claims if needle in claim.get("statement", "").casefold()]
+                claims = [claim for claim in claims if self._claim_matches_query(workspace_ref, claim, needle)]
             if task_ref:
                 task = self.store.read_task(workspace_ref, task_ref)
                 task_projects = set(task.get("project_refs", []))
@@ -1322,6 +1322,8 @@ class Runtime:
             if record_ref.startswith("CLM-"):
                 detail["trust_posture"] = self.posture.trust_posture(workspace_ref, record)
                 detail["scope"] = self.posture.scope_metadata(workspace_ref, record, None)
+                if record.get("claim_form") == "aggregate":
+                    detail["aggregate_drilldown"] = self._aggregate_drilldown(workspace_ref, record)
                 claim_pressure = self._claim_analysis_pressure(record)
                 if not record.get("source_refs"):
                     source_pressure.append(
@@ -1822,9 +1824,17 @@ class Runtime:
         scope = self.posture.scope_metadata(workspace_ref, claim, task)
         trust_posture = self.posture.trust_posture(workspace_ref, claim)
         bridge_context = self._scope_bridge_context(workspace_ref, claim["id"], task)
+        aggregate_drilldown = self._aggregate_drilldown(workspace_ref, claim) if claim.get("claim_form") == "aggregate" else None
+        valid_moves = [
+            move("detail", "record_detail", "Inspect claim details."),
+            move("append_ledger", "append_ledger", "Snapshot claim if current agent can commit it.", writes=True),
+        ]
+        if aggregate_drilldown:
+            valid_moves.insert(1, move("detail", "record_detail", "Inspect aggregate children from aggregate_drilldown.underlying_refs."))
         return {
             "record_ref": claim["id"],
             "statement": claim["statement"],
+            "claim_form": claim.get("claim_form", "assertion"),
             "display": self._claim_display(workspace_ref, claim),
             "scope_origin": scope["scope_origin"],
             "workspace_ref": workspace_ref,
@@ -1834,10 +1844,48 @@ class Runtime:
             "bridge_context": bridge_context,
             "trust_posture": trust_posture,
             "drilldown": claim.get("source_refs", []),
-            "valid_moves": [
-                move("detail", "record_detail", "Inspect claim details."),
-                move("append_ledger", "append_ledger", "Snapshot claim if current agent can commit it.", writes=True),
-            ],
+            "aggregate_drilldown": aggregate_drilldown,
+            "valid_moves": valid_moves,
+        }
+
+    def _claim_matches_query(self, workspace_ref: str, claim: dict[str, Any], needle: str) -> bool:
+        if needle in str(claim.get("statement", "")).casefold():
+            return True
+        if claim.get("claim_form") != "aggregate":
+            return False
+        for ref in (claim.get("aggregation") or {}).get("underlying_refs", []):
+            if not isinstance(ref, str):
+                continue
+            try:
+                child = self.store.read_claim(workspace_ref, ref)
+            except TEPError:
+                continue
+            if needle in str(child.get("statement", "")).casefold():
+                return True
+        return False
+
+    def _aggregate_drilldown(self, workspace_ref: str, claim: dict[str, Any]) -> dict[str, Any] | None:
+        refs = [ref for ref in (claim.get("aggregation") or {}).get("underlying_refs", []) if isinstance(ref, str)]
+        if not refs:
+            return None
+        children = []
+        for ref in refs:
+            try:
+                child = self.store.read_claim(workspace_ref, ref)
+            except TEPError:
+                children.append({"claim_ref": ref, "missing": True})
+                continue
+            children.append(
+                {
+                    "claim_ref": ref,
+                    "display": self._claim_display(workspace_ref, child),
+                    "trust_posture": self.posture.trust_posture(workspace_ref, child),
+                }
+            )
+        return {
+            "underlying_refs": refs,
+            "children": children,
+            "valid_moves": [move("detail", "record_detail", "Call record_detail for a child CLM-* to inspect full evidence.")],
         }
 
     def _claim_rank(self, workspace_ref: str, claim: dict[str, Any], task_ref: str | None) -> int:
@@ -1853,7 +1901,7 @@ class Runtime:
         if claim.get("source_refs"):
             score += 1000
         if claim.get("claim_form") == "aggregate":
-            score += 500
+            score += 6000
         return score
 
     def _final_gate(

@@ -2003,6 +2003,38 @@ class CoreTests(unittest.TestCase):
             self.assertIn("answer", posture["usable_for"])
             self.assertIn("protected_action", posture["usable_for"])
 
+    def test_lookup_prioritizes_aggregate_claims_and_exposes_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Runtime(TEPHome(tmp))
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            first = runtime.create_claim(workspace["id"], "Cache TTL is 30 seconds.").data["claim"]
+            second = runtime.create_claim(workspace["id"], "Cache invalidation runs after writes.").data["claim"]
+            aggregate = runtime.create_claim(
+                workspace["id"],
+                "Cache behavior summary.",
+                claim_form="aggregate",
+                support_refs=[first["id"], second["id"]],
+                aggregation={
+                    "underlying_refs": [first["id"], second["id"]],
+                    "limits": "Only covers cache TTL and invalidation behavior.",
+                },
+            ).data["claim"]
+
+            lookup = runtime.lookup_facts(workspace["id"], query="TTL")
+
+            self.assertTrue(lookup.ok, lookup.error)
+            self.assertEqual(lookup.data["results"][0]["record_ref"], aggregate["id"])
+            self.assertEqual(lookup.data["results"][0]["claim_form"], "aggregate")
+            self.assertEqual(lookup.data["results"][0]["aggregate_drilldown"]["underlying_refs"], [first["id"], second["id"]])
+            self.assertEqual(
+                [child["claim_ref"] for child in lookup.data["results"][0]["aggregate_drilldown"]["children"]],
+                [first["id"], second["id"]],
+            )
+
+            detail = runtime.record_detail(workspace["id"], aggregate["id"])
+            self.assertEqual(detail.data["detail"]["links"]["aggregate_underlying_refs"], [first["id"], second["id"]])
+            self.assertEqual(detail.data["detail"]["aggregate_drilldown"]["children"][0]["claim_ref"], first["id"])
+
     def test_ingest_text_creates_typed_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Runtime(TEPHome(tmp))
@@ -3473,7 +3505,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.4")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.5")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3538,7 +3570,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.4")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.5")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3556,7 +3588,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.4")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.5")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

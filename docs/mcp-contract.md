@@ -314,6 +314,11 @@ Required response shape:
 : Search facts under workspace scope, including current project, workspace
 domain stock, dependencies, examples, and references. Returns source drilldown
 routes and bridge requirements.
+Lookup should prefer relevant aggregate `CLM-*` records over their children so
+agents receive a compact working handle first. Aggregates remain expandable:
+results include `aggregate_drilldown.underlying_refs`, and agents can call
+`record_detail` on the aggregate or any child `CLM-*` when they need the exact
+leaf evidence.
 
 `curiosity_view`
 : Return TAP, cold zones, bridge candidates, contradiction candidates, backend

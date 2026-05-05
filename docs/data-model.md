@@ -481,6 +481,11 @@ stored on the aggregate and it cannot override weak leaves:
 - aggregate posture exposes weakest refs so the agent can strengthen the chain
   instead of treating the aggregate as magic proof.
 
+Lookup should rank relevant aggregate claims above their underlying leaves.
+This is a token-control behavior, not proof behavior: the agent sees the compact
+summary first and can expand `aggregation.underlying_refs` with `record_detail`
+when it needs leaf evidence or weakest-link inspection.
+
 Compilation rules:
 
 - `compiled_kind=model` summarizes a mechanism, invariant, policy, or design

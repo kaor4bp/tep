@@ -362,6 +362,7 @@ class PostureService:
                 "support_refs": record.get("support_refs", []),
                 "contradiction_refs": record.get("contradiction_refs", []),
                 "relation": record.get("relation"),
+                "aggregate_underlying_refs": (record.get("aggregation") or {}).get("underlying_refs", []),
             }
         if record.get("record_type") == "source":
             return {"project_refs": record.get("project_refs", [])}
