@@ -135,7 +135,18 @@ class TEPHome:
         return record
 
     def read_workspace(self, workspace_ref: str) -> dict[str, Any]:
-        return read_json(self.root / "registry" / "workspaces" / f"{workspace_ref}.json")
+        path = self.root / "registry" / "workspaces" / f"{workspace_ref}.json"
+        if path.exists():
+            return read_json(path)
+        if self.workspace_dir(workspace_ref).exists():
+            return {
+                "id": workspace_ref,
+                "record_type": "workspace",
+                "name": workspace_ref,
+                "status": "active",
+                "registry_status": "missing",
+            }
+        return read_json(path)
 
     def active_workspace_by_name(self, name: str) -> dict[str, Any] | None:
         self.ensure()

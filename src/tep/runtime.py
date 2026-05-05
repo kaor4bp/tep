@@ -1007,7 +1007,7 @@ class Runtime:
         def op() -> RuntimeResponse:
             ledger = Ledger(self.store, workspace_ref, agent_ref)
             result = ledger.append_claim(private_key=private_key, claim_ref=claim_ref, why=why, difficulty_bits=difficulty_bits)
-            validation = ledger.validate()
+            validation = ledger.validate(include_source_evidence=False)
             return ok_response(
                 {"ledger_row": result.row, "validation": validation.__dict__},
                 ledger_pressure=self._ledger_pressure(workspace_ref, agent_ref),
@@ -1058,7 +1058,7 @@ class Runtime:
                 difficulty_bits=difficulty_bits,
             )
             return ok_response(
-                {"ledger_row": result.row, "validation": ledger.validate().__dict__},
+                {"ledger_row": result.row, "validation": ledger.validate(include_source_evidence=False).__dict__},
                 ledger_pressure=self._ledger_pressure(workspace_ref, agent_ref),
                 valid_moves=[
                     move("probe_step", "capture_probe_result", "Capture observed evidence for the open ACT.", writes=True),
@@ -1091,7 +1091,7 @@ class Runtime:
                 difficulty_bits=difficulty_bits,
             )
             return ok_response(
-                {"ledger_row": result.row, "validation": ledger.validate().__dict__},
+                {"ledger_row": result.row, "validation": ledger.validate(include_source_evidence=False).__dict__},
                 ledger_pressure=self._ledger_pressure(workspace_ref, agent_ref),
                 valid_moves=[
                     move("mutate_record", "create_claim", "Integrate captured evidence into a claim.", writes=True),
@@ -1124,7 +1124,7 @@ class Runtime:
                 difficulty_bits=difficulty_bits,
             )
             return ok_response(
-                {"ledger_row": result.row, "validation": ledger.validate().__dict__},
+                {"ledger_row": result.row, "validation": ledger.validate(include_source_evidence=False).__dict__},
                 ledger_pressure=self._ledger_pressure(workspace_ref, agent_ref),
                 valid_moves=[
                     move("validate", "validate_ledger", "Replay ledger after closing ACT."),
@@ -1148,10 +1148,10 @@ class Runtime:
             agent = self.store.read_agent(workspace_ref, agent_ref)
             assert_private_key_matches(agent["public_key"], agent["key_fingerprint"], private_key)
             ledger = Ledger(self.store, workspace_ref, agent_ref)
-            validation = ledger.validate()
+            validation = ledger.validate(include_source_evidence=False)
             if not validation.ok:
                 raise ValidationError("ledger_invalid: " + "; ".join(validation.errors))
-            open_act = ledger.current_open_act_row()
+            open_act = ledger.current_open_act_row(include_source_evidence=False)
             if open_act is None:
                 raise ValidationError("open_act_required")
             self._require_open_act_fresh(workspace_ref, open_act)
@@ -2235,7 +2235,7 @@ class Runtime:
                 "level_reason": "no current agent selected",
                 "valid_moves": [move("mutate_record", "start_agent_thread", "Start or select an AGENT-*.", writes=True)],
             }
-        validation = Ledger(self.store, workspace_ref, agent_ref).validate()
+        validation = Ledger(self.store, workspace_ref, agent_ref).validate(include_source_evidence=False)
         return {
             "level": "none" if validation.ok else "blocked",
             "current_agent": agent_ref,

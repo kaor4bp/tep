@@ -95,6 +95,12 @@ execution result. `SRC-*` cites the relevant RUN output or artifact.
 `close_probe` must reference the evidence or an explicit no-update/cancel/
 supersede reason.
 
+ACT admission uses structural ledger validation: owner, row order, branch
+hashes, append hashes, payload hashes, signatures, PoW, and open-ACT state.
+It does not require replaying the entire workspace source-event log. Damaged
+source events must block final/protected proof commitments, but they should not
+block opening a probe whose purpose may be to collect fresh evidence.
+
 ## Ledger Pressure
 
 Every serious MCP response includes:
@@ -131,7 +137,7 @@ boundary, MCP returns valid choices rather than one forced next move.
 Protected mutation:
 
 - current `AGENT-*` is valid
-- ledger validates
+- ledger structurally validates
 - open ACT exists
 - ACT is downstream of source-backed claim path
 - no unresolved contradiction is on the required path

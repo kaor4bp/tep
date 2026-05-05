@@ -377,6 +377,10 @@ needs an evidence-producing probe:
 
 `protected_action_preflight` remains available for stricter audits, but it is
 not the default requirement for ordinary Bash hook admission.
+ACT/hook admission validates the current agent ledger structurally. It may
+still allow a fresh probe when old workspace source-event replay is damaged;
+those source-event failures remain blockers for final/protected proof until the
+source is recaptured, reaccepted, or excluded from support.
 
 ACT is for the next bounded action, not for laundering old observations into
 permission. Open ACT against a narrow action intent or probe hypothesis such as

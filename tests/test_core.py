@@ -108,6 +108,22 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(brief.data["agent"]["inferred_from_workspace"])
             self.assertEqual(brief.ledger_pressure["current_agent"], agent["id"])
 
+    def test_brief_current_context_tolerates_missing_workspace_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("solo-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            (Path(tmp) / "registry" / "workspaces" / f"{workspace['id']}.json").unlink()
+
+            brief = runtime.brief_current_context(workspace["id"], agent["id"])
+
+            self.assertTrue(brief.ok, brief.error)
+            self.assertEqual(brief.data["workspace"]["ref"], workspace["id"])
+            self.assertEqual(brief.data["workspace"]["name"], workspace["id"])
+            self.assertTrue(brief.ledger_pressure["ledger_valid"])
+
     def test_start_agent_thread_writes_current_agent_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Runtime(TEPHome(tmp))
@@ -522,6 +538,61 @@ class CoreTests(unittest.TestCase):
             validation = ledger.validate()
             self.assertFalse(validation.ok)
             self.assertTrue(any("source event self-hash mismatch" in error for error in validation.errors))
+
+    def test_tampered_source_event_does_not_block_structural_act_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TEPHome(tmp)
+            runtime = Runtime(store)
+            workspace = runtime.create_workspace("workspace").data["workspace"]
+            identity = generate_agent_identity("probe-agent")
+            agent = runtime.start_agent_thread(workspace_ref=workspace["id"], thread_ref="thread-1", identity=identity).data["agent"]
+            source = runtime.create_source(
+                workspace["id"],
+                source_kind="user_message",
+                quote="Verify current retry behavior.",
+                classification={
+                    "input_class": "instruction",
+                    "source_class": "user",
+                    "document_kind": "message",
+                    "evidence_role": "intent",
+                    "authority_scope": "task_intent",
+                    "independence_key": "user:test",
+                },
+            ).data["source"]
+            claim = runtime.create_claim(workspace["id"], "Verify current retry behavior.", source_refs=[source["id"]]).data["claim"]
+            snapshotted = runtime.append_ledger(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                why="Snapshot probe target.",
+                difficulty_bits=8,
+            )
+            self.assertTrue(snapshotted.ok, snapshotted.error)
+
+            event_path = store.source_events_path(workspace["id"])
+            event = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
+            event["reason"] = "Tampered event reason."
+            event_path.write_text(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            ledger = Ledger(store, workspace["id"], agent["id"])
+            self.assertFalse(ledger.validate().ok)
+            self.assertTrue(ledger.validate(include_source_evidence=False).ok)
+
+            opened = runtime.open_probe(
+                workspace_ref=workspace["id"],
+                agent_ref=agent["id"],
+                private_key=identity.private_key,
+                claim_ref=claim["id"],
+                intent="Verify current retry behavior.",
+                allowed_action_kind="bash",
+                expected_evidence="command output",
+                difficulty_bits=8,
+            )
+
+            self.assertTrue(opened.ok, opened.error)
+            self.assertEqual(opened.data["ledger_row"]["kind"], "act")
+            self.assertTrue(opened.data["validation"]["ok"])
+            self.assertTrue(opened.ledger_pressure["ledger_valid"])
 
     def test_source_event_replay_detects_reorder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3505,7 +3576,7 @@ class CoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(initialized["result"]["serverInfo"]["name"], "tep")
-            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.5")
+            self.assertEqual(initialized["result"]["serverInfo"]["version"], "0.7.6")
 
             tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
@@ -3570,7 +3641,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(raw.startswith("Content-Length: "), raw)
             body = raw.split("\r\n\r\n", 1)[1]
             response = json.loads(body)
-            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.5")
+            self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.6")
 
     def test_mcp_dev_launcher_starts_with_dependency_checked_python(self) -> None:
         script = Path(__file__).resolve().parents[1] / "plugins" / "tep" / "scripts" / "tep-mcp-dev.sh"
@@ -3588,7 +3659,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)
-        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.5")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "0.7.6")
 
     def test_mcp_stdio_binary_loop_handles_utf8_content_length(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

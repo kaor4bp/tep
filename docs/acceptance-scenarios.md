@@ -244,6 +244,9 @@ Expected:
 - source event replay detects hash-chain mismatch
 - source acceptance derived from the broken event chain is invalid
 - any ledger row snapshotting the affected source event path fails replay
+- structural ACT admission can still open a fresh probe from a valid
+  agent-owned ledger branch; the source-event failure remains a blocker for
+  final/protected proof commitments
 
 An agent rewrites a source quote or classification after a ledger row used it.
 

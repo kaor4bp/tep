@@ -149,7 +149,7 @@ class Ledger:
         agent = self._agent()
         assert_private_key_matches(agent["public_key"], agent["key_fingerprint"], private_key)
 
-        replay = self._replay()
+        replay = self._replay(include_source_evidence=False)
         if not replay.validation.ok:
             raise ValidationError("ledger_invalid: " + "; ".join(replay.validation.errors))
         if kind == "act" and replay.validation.open_act is not None:
@@ -218,11 +218,11 @@ class Ledger:
         self.store.append_jsonl(self.store.ledger_path(self.workspace_ref, self.agent_ref), row)
         return LedgerAppendResult(row=row, state_hash=state_hash, append_hash=current_append_hash)
 
-    def validate(self) -> LedgerValidation:
-        return self._replay().validation
+    def validate(self, *, include_source_evidence: bool = True) -> LedgerValidation:
+        return self._replay(include_source_evidence=include_source_evidence).validation
 
-    def current_open_act_row(self) -> dict[str, Any] | None:
-        replay = self._replay()
+    def current_open_act_row(self, *, include_source_evidence: bool = True) -> dict[str, Any] | None:
+        replay = self._replay(include_source_evidence=include_source_evidence)
         if not replay.validation.ok:
             raise ValidationError("ledger_invalid: " + "; ".join(replay.validation.errors))
         if replay.validation.open_act is None:
@@ -247,18 +247,18 @@ class Ledger:
         }
         return canonical_hash(material)
 
-    def _replay(self) -> _ReplayState:
+    def _replay(self, *, include_source_evidence: bool = True) -> _ReplayState:
         agent = self._agent()
         context_hash = self.ledger_context_hash()
         rows = self.store.read_jsonl(self.store.ledger_path(self.workspace_ref, self.agent_ref))
-        source_event_validation = self.store.validate_source_events(self.workspace_ref)
+        source_event_validation = self.store.validate_source_events(self.workspace_ref) if include_source_evidence else None
         errors: list[str] = []
         state_by_id: dict[str, str] = {}
         append_hash = self._genesis_append_hash()
         seen: set[str] = set()
         open_act: str | None = None
 
-        if any(row.get("source_snapshots") for row in rows) and not source_event_validation.ok:
+        if include_source_evidence and source_event_validation is not None and any(row.get("source_snapshots") for row in rows) and not source_event_validation.ok:
             errors.extend(f"source_events: {error}" for error in source_event_validation.errors)
 
         for index, row in enumerate(rows, start=1):
@@ -296,37 +296,38 @@ class Ledger:
             else:
                 errors.append(f"{row_id}: missing claim_snapshot")
 
-            for source_snapshot in row.get("source_snapshots", []):
-                source_ref = source_snapshot.get("ref")
-                if not isinstance(source_ref, str):
-                    errors.append(f"{row_id}: invalid source snapshot ref")
-                    continue
-                try:
-                    source = self.store.read_source(self.workspace_ref, source_ref)
-                except Exception as exc:  # noqa: BLE001 - validator should collect bad-row reasons.
-                    errors.append(f"{row_id}: source snapshot missing: {source_ref}: {exc}")
-                    continue
-                if source_snapshot.get("source_hash") != canonical_hash(self.store.source_material_payload(source)):
-                    errors.append(f"{row_id}: source_hash mismatch for {source_ref}")
-                if source_snapshot.get("classification_hash") != canonical_hash(source.get("classification")):
-                    errors.append(f"{row_id}: classification_hash mismatch for {source_ref}")
-                event_ref = source_snapshot.get("acceptance_event_ref")
-                if event_ref is not None:
-                    if event_ref not in source_event_validation.event_hashes:
-                        errors.append(f"{row_id}: source event not valid in replay: {event_ref}")
-                    if source_event_validation.accepted_sources.get(source_ref) != event_ref:
-                        errors.append(f"{row_id}: source acceptance event is not current accepted event for {source_ref}")
-                    event = self.store.source_event_by_id(self.workspace_ref, event_ref)
-                    if event is None:
-                        errors.append(f"{row_id}: missing source event {event_ref}")
-                    else:
-                        event_hash = canonical_hash({key: value for key, value in event.items() if key != "event_hash"})
-                        if event_hash != event.get("event_hash"):
-                            errors.append(f"{row_id}: source event self-hash mismatch for {event_ref}")
-                        if source_snapshot.get("acceptance_event_hash") != event.get("event_hash"):
-                            errors.append(f"{row_id}: source event hash mismatch for {event_ref}")
-                        if source_snapshot.get("source_event_log_hash") != event.get("event_log_hash"):
-                            errors.append(f"{row_id}: source event log hash mismatch for {event_ref}")
+            if include_source_evidence:
+                for source_snapshot in row.get("source_snapshots", []):
+                    source_ref = source_snapshot.get("ref")
+                    if not isinstance(source_ref, str):
+                        errors.append(f"{row_id}: invalid source snapshot ref")
+                        continue
+                    try:
+                        source = self.store.read_source(self.workspace_ref, source_ref)
+                    except Exception as exc:  # noqa: BLE001 - validator should collect bad-row reasons.
+                        errors.append(f"{row_id}: source snapshot missing: {source_ref}: {exc}")
+                        continue
+                    if source_snapshot.get("source_hash") != canonical_hash(self.store.source_material_payload(source)):
+                        errors.append(f"{row_id}: source_hash mismatch for {source_ref}")
+                    if source_snapshot.get("classification_hash") != canonical_hash(source.get("classification")):
+                        errors.append(f"{row_id}: classification_hash mismatch for {source_ref}")
+                    event_ref = source_snapshot.get("acceptance_event_ref")
+                    if event_ref is not None and source_event_validation is not None:
+                        if event_ref not in source_event_validation.event_hashes:
+                            errors.append(f"{row_id}: source event not valid in replay: {event_ref}")
+                        if source_event_validation.accepted_sources.get(source_ref) != event_ref:
+                            errors.append(f"{row_id}: source acceptance event is not current accepted event for {source_ref}")
+                        event = self.store.source_event_by_id(self.workspace_ref, event_ref)
+                        if event is None:
+                            errors.append(f"{row_id}: missing source event {event_ref}")
+                        else:
+                            event_hash = canonical_hash({key: value for key, value in event.items() if key != "event_hash"})
+                            if event_hash != event.get("event_hash"):
+                                errors.append(f"{row_id}: source event self-hash mismatch for {event_ref}")
+                            if source_snapshot.get("acceptance_event_hash") != event.get("event_hash"):
+                                errors.append(f"{row_id}: source event hash mismatch for {event_ref}")
+                            if source_snapshot.get("source_event_log_hash") != event.get("event_log_hash"):
+                                errors.append(f"{row_id}: source event log hash mismatch for {event_ref}")
             if row.get("source_set_hash") != canonical_hash(row.get("source_snapshots", [])):
                 errors.append(f"{row_id}: source_set_hash mismatch")
 
