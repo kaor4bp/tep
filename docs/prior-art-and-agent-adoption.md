@@ -8,10 +8,10 @@ systems, then adds a local trust protocol around them.
 
 `MemGPT`
 : Teaches the useful memory-tier idea: a small current context backed by a
-larger archival store. TEP uses this as briefing plus `AGENT-*` working context
+larger archival store. TEP uses this as briefing plus `agent_*` working context
 over the durable TEP context store. TEP does not let the agent rewrite memory
-freely; durable commitments go through typed `SRC-*`, `CLM-*`, source events,
-and ledger operations.
+freely; durable commitments go through typed `src_*`, `clm_*`, `rel_*`, and
+checked chain operations.
 
 `Generative Agents`
 : Shows the value of observation, planning, reflection, and memory retrieval.
@@ -21,9 +21,10 @@ hypothesis-level claims until supported by sources.
 
 `ReAct`
 : Shows that reasoning and acting work better when interleaved with
-observations. TEP turns that into a protocol sequence:
-`ACT -> preflight -> RUN -> SRC -> CLM/relation -> close_act`. The private
-reasoning trace is not proof; captured observations and ledger snapshots are.
+observations. TEP turns that into a lighter sequence:
+`prepare context -> run/capture -> SRC/RUN -> CLM/REL -> checked CHAIN`. The
+private reasoning trace is not proof; captured observations and selected
+evidence/relations are.
 
 `Reflexion`
 : Shows that agents can improve across attempts by storing verbal feedback.
@@ -38,7 +39,7 @@ captured and accepted.
 `GraphRAG`
 : Confirms that graph construction and hierarchical/community summaries help
 with broad sensemaking over private corpora. TEP uses this idea as `MAP-*`,
-map-of-maps, claim graph, and compiled `CLM-*` summaries/models/flows. Generated
+map-of-maps, claim graph, and compiled `clm_*` summaries/models/flows. Generated
 graph summaries remain navigation or compiled claims with explicit support.
 
 `FActScore`
@@ -49,17 +50,17 @@ that decomposes final/draft answers into claim support requirements.
 `Chain-of-Verification`
 : Supports verification questions before final answers. In TEP, verification
 questions become valid moves such as lookup, source capture, open probe,
-validate ledger, or user question.
+check chain, or user question.
 
 `W3C PROV` and `OpenLineage`
 : Support event/provenance thinking: entities, activities, agents, runs,
 datasets, extensible metadata. TEP keeps a smaller local model:
-`SRC-*`, `RUN-*`, `AGENT-*`, source audit events, and ledger rows.
+`src_*`, `run_*`, `agent_*`, relation edges, and selected chains.
 
 `AutoGen`
 : Confirms the importance of multi-agent/tool/human collaboration patterns.
-TEP adds cross-agent continuity by making foreign ledgers readable and facts
-shareable while preserving agent-owned ledger appends.
+TEP adds cross-agent continuity by making facts, notes, tasks, and selected
+chains shareable while preserving session attribution.
 
 `Voyager`
 : Shows that skill libraries and curricula can produce reuse without model
@@ -77,20 +78,21 @@ TEP v1 adopts these constraints:
 - Reflection and self-critique are useful, but start as navigation or
   hypothesis-level material.
 - Final/protected/task-done paths should be decomposable into supported
-  `CLM-*` claims.
-- Repeated patterns should compile into `CLM-*` summaries/models/flows only
+  `clm_*` claims.
+- Repeated patterns should compile into `clm_*` summaries/models/flows only
   when supported by trusted or user-confirmed inputs.
-- Multi-agent coordination reads shared facts and foreign ledgers, but appends
-  remain owner-bound.
+- Multi-agent coordination reads shared facts, notes, tasks, and checked chains
+  while preserving which session created or used them.
 
 ## Agent Adoption Mechanics
 
 The protocol must motivate agents to use it. TEP does this with several layers.
 
 `SKILL.md`
-: Teaches the agent the operating loop: brief, lookup, capture/classify source,
-create/select/dedup claim, append ledger, open/capture/close ACT, and finalize
-only when gates allow.
+: Teaches the agent the operating loop: prepare context, retrieve before
+guessing, capture/classify source, create/select/dedup CLM, relate facts,
+prepare/check a chain, decompose broad work, and finish only when support is
+good enough.
 
 MCP guided choices
 : Every meaningful MCP response returns `valid_moves`, and failed responses
@@ -99,17 +101,17 @@ infer mechanical validity from scratch.
 
 Briefing advantage
 : Using TEP gives the agent a shorter, more relevant starting context:
-active task, selected facts, blockers, open ACT, curiosity position, trust
-posture, and deferred work.
+active task, selected facts, blockers, curiosity position, trust posture,
+counterfacts, gaps, priority plan, and deferred work.
 
 Search advantage
 : Lookup, curiosity map, source indexes, dedup indexes, and compiled claims make
 TEP cheaper than rediscovering facts manually.
 
 Commitment gates
-: Protected mutation, final answer, and task-done paths require valid ledger
-and source-backed support. The agent can explore without TEP, but cannot claim
-commitment through TEP without using the protocol.
+: Final answer and task-done paths require selected CLM support, evidence, and
+a checked chain. The agent can explore without TEP, but cannot make TEP-backed
+commitments without using the fact graph.
 
 Mechanical reward
 : Successful protocol use creates reusable facts, source captures, compiled
@@ -141,5 +143,5 @@ instead of a dead-end error. This turns protocol friction into navigation.
 - Do not make the model "learn" by pretending its hidden state changed.
 - Do not trust reflection, memory retrieval, or graph summaries as proof.
 - Do not make one mandatory next action when several valid moves exist.
-- Do not let convenience writes bypass `SRC-*`, `CLM-*`, source events, or
-  ledger validation.
+- Do not let convenience writes bypass `src_*`, `clm_*`, `rel_*`, or chain
+  validation.

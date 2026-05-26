@@ -1,189 +1,90 @@
 # Reasoning Ledger
 
-The reasoning ledger is an append-only per-agent graph ledger over claim
-snapshots. It validates reasoning structure, ownership, and tamper evidence. It
-does not prove that the agent chose the best interpretation.
+> Historical 0.9/0.10 design note. The active 0.12 proof primitive is
+> `chain_*` over `clm_*`/`rel_*`/`src_*` evidence. Do not use this document as
+> the current agent-facing MCP contract.
 
-Ledger gates use computed trust posture, not stored claim status. The runtime
-may return labels such as `hypothesis`, `unclassified_hypothesis`,
-`trusted_fact`, or `contested` to the agent, but those labels are derived from
-the CLM graph and current context.
+The ledger is the long-term logical chain for one `task_*` and one `agent_*`:
+
+```text
+~/.tep/tasks/task_*/ledgers/agent_*.jsonl
+```
+
+It is append-only JSONL. Branches are represented by `prev`; physical file order
+is represented by `append_prev`. There is no separate branch record.
 
 ## Row Kinds
 
-- `claim`: snapshot or advance through a `CLM-*` as ledger-local `CLM@rev`.
-- `relation`: snapshot or enter a relation `CLM-*` that connects endpoint claims.
-- `act`: open a probe or intended check.
-- `capture`: bind observed result material to the open probe.
-- `close_act`: close the open probe by integration, cancellation,
-  supersession, or explicit no-update reason.
+- `claim`: selected claim support
+- `relation`: selected relation support
+- `act`: open bounded probe
+- `capture`: evidence captured for the open probe
+- `close_act`: close the probe
 
-## State Rules
+Rows can include:
 
-- A ledger row must belong to the current `AGENT-*`.
-- A row must extend a valid branch predecessor.
-- A row must preserve physical append-log order.
-- `claim` and `relation` rows cite a bare `CLM-*` plus ledger-local `rev` and
-  include the resolved snapshot hash.
-- Rows that commit a claim path include hashes of accepted `SRC-*` snapshots
-  and source acceptance events used by that snapshot.
-- A branch continues from the selected ledger predecessor, not from the current
-  mutable `CLM-*` file by default.
-- Different claim-to-claim transitions require a relation claim.
-- Relation ledger rows must carry endpoint snapshots for the branch they enter.
-- Repeating the same `CLM@rev` without material change does not advance state.
-- Invalid appends write nothing.
+- `argument_role`
+- `branch_note`
+- `supersedes`
+- `rejects_refs`
 
-## ACT Lifecycle
+These are metadata for reasoning, not separate canonical branch entities.
 
-```text
-none
-  -> open_probe / act
-  -> RUN, when command/tool execution happens while ACT is fresh
-  -> capture_probe_result
-  -> close_probe
-  -> none
-```
+## CLM Revisions
 
-Closure outcomes:
+CLM revision exists only in the ledger. A `clm_*` file is the current global
+claim record. When a ledger snapshots a CLM, that snapshot receives a
+ledger-local `rev`. A later row can branch from the same CLM with a different
+snapshot if the agent decides that the fact changed or must be reconsidered.
 
-- `claim_updated`
-- `claim_contested`
-- `relation_supported`
-- `relation_rejected`
-- `no_relevant_evidence`
-- `cancelled`
-- `superseded`
-- `expired`
+Outside the ledger, agents refer to bare `clm_*`.
 
-Rules:
+## ACT
 
-- Minimal v1 keeps one open ACT per agent ledger.
-- Protected mutation requires a fresh open ACT.
-- Final answer and task completion require no open ACT.
-- Another ACT cannot open from the same branch without new material state.
-- Captured command/test output cannot support commitment until integrated into
-  `SRC-*` and `CLM-*`.
+ACT is a pressure mechanism, not a punishment mechanism. It creates an
+obligation to say what claim the next evidence-producing/protected action is
+probing, then capture and close the result.
 
-## ACT Execution Contract
+`act(open)` can write the first snapshot for a CLM directly. Agents should not
+need a long ritual of `claim -> reason -> act` for ordinary probes. The hook
+gate checks only that a fresh ACT exists in the current task/agent ledger and
+has not expired under settings.
 
-`open_probe` must declare:
-
-- target `CLM-*` or relation refs
-- intent
-- allowed action kind
-- workspace/project/task scope
-- expected evidence
-- current ledger head
-
-Protected work follows this sequence:
-
-```text
-open_probe
-  -> execute action
-  -> record_run
-  -> capture_probe_result
-  -> create/update CLM or relation, or explicit no-update
-  -> close_probe
-```
-
-Default hook admission checks only that the ledger has a matching open ACT and
-that it has not expired under `settings.enforcement.act_timeout_seconds`.
-`protected_action_preflight` is optional stricter/audited binding by action
-kind, command/action hash, cwd/scope, and expiry. `RUN-*` stores the observed
-execution result. `SRC-*` cites the relevant RUN output or artifact.
-`close_probe` must reference the evidence or an explicit no-update/cancel/
-supersede reason.
-
-ACT admission uses structural ledger validation: owner, row order, branch
-hashes, append hashes, payload hashes, signatures, PoW, and open-ACT state.
-It does not require replaying the entire workspace source-event log. Damaged
-source events must block final/protected proof commitments, but they should not
-block opening a probe whose purpose may be to collect fresh evidence.
-
-## Ledger Pressure
-
-Every serious MCP response includes:
-
-```json
-{
-  "ledger_pressure": {
-    "level": "none|low|medium|high|blocked",
-    "current_agent": "AGENT-*|null",
-    "ledger_valid": true,
-    "current_head": "L-*|null",
-    "open_act": "L-*|null",
-    "level_reason": "...",
-    "valid_moves": [
-      {
-        "priority": 10,
-        "tool": "probe_step|append_ledger|lookup|detail|validate|mutate_record|refresh_runtime|status",
-        "operation_kind": "typed operation name, e.g. create_source|open_probe|close_probe|refresh_index",
-        "why": "...",
-        "writes": false,
-        "requires_user": false,
-        "expected_output": "..."
-      }
-    ]
-  }
-}
-```
-
-Pressure is guidance until the agent reaches a commitment boundary. Even at a
-boundary, MCP returns valid choices rather than one forced next move.
+ACT close is tied to the CLM that opened the ACT. A capture row and close row
+must reference the same opening ACT. Closing without captured evidence is only
+valid with an explicit `no_signal_reason`, for example when a retry attempt was
+aborted before a command ran. This keeps ACT useful as pressure without forcing
+agents to fabricate evidence.
 
 ## Hard Gates
 
-Protected mutation:
+Final/task-done checks require:
 
-- current `AGENT-*` is valid
-- ledger structurally validates
-- open ACT exists
-- ACT is downstream of source-backed claim path
-- no unresolved contradiction is on the required path
+- valid task/agent ledger
+- no open ACT
+- selected support refs are `clm_*`
+- selected support refs were ledgered by the current task/agent chain
+- support posture is answer-usable
+- no unresolved task blockers for task done
 
-Final answer:
+`src_*` and `run_*` cannot be final support directly. They must be interpreted
+into `clm_*`.
 
-- ledger validates
-- committed claims are on the current valid ledger path
-- committed claim path source snapshots and acceptance events validate
-- answer support validates: draft/final statements can be decomposed into
-  atomic support requirements, and each committed requirement maps to an
-  acceptable `CLM-*`/`SRC-*`/ledger path
-- no open ACT remains
-- unsupported statements are removed, represented as uncertainty/open question,
-  or routed through a valid repair move before final commitment
+## Soft Pressure
 
-Task done:
+TEP returns pressure instead of trying to perfectly classify every statement.
+Examples:
 
-- ledger validates
-- no open ACT remains
-- child tasks and blockers are resolved
-- done criteria have source-backed support claims
-- source-backed support includes valid source acceptance events and source
-  snapshot hashes
+- bookkeeping-like CLM
+- unsupported CLM
+- low argument trust index
+- open ACT
+- stale or missing source support
 
-Cross-project commitment:
+A formally valid ledger can still have low argument quality. The agent should
+strengthen the chain instead of adding more command-log CLM records.
 
-- foreign/example fact is bridged by a relation claim
-- bridge relation enters the ledger
-
-Runtime-only hypothesis:
-
-- runtime observations alone can justify exploration and probes
-- runtime observations alone do not make a trusted fact
-- hypothesis use must carry a classified inference posture such as deduction,
-  induction, abduction, fact-based assumption, possible relation, analogy, or
-  freshness challenge, or user working assumption
-- a hypothesis cannot be the basis for another hypothesis; it may only route
-  the agent to lookup, source capture, user question, or an ACT verification
-  branch
-- unclassified hypotheses are blocked for final/protected commitment
-- a freshness challenge may justify lookup or an ACT probe against a trusted
-  fact, but it does not invalidate the trusted fact or its old `CLM@rev`
-  snapshots until supported evidence is ledgered
-- theory/document support or explicit user confirmation is required before the
-  derived posture can become trusted for final or protected-action commitment
-- source diversity matters: repeated observations from the same independence
-  key saturate as runtime confidence and do not replace independent
-  theory/document/user support
+Use `check_argument` before final support or risky actions when the chain is
+unclear. It is a runtime quality check over selected `clm_*` refs: it does not
+create proof, but it points out bookkeeping claims, unsupported leaves,
+hypothesis-on-hypothesis links, stale aggregates, and missing ledger snapshots.

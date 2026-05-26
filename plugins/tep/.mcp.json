@@ -2,7 +2,10 @@
   "mcpServers": {
     "tep": {
       "command": "./scripts/tep-mcp-dev.sh",
-      "args": []
+      "args": [],
+      "env": {
+        "TEP_SERVER_URL": "http://127.0.0.1:8765"
+      }
     }
   }
 }

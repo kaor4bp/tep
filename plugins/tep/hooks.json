@@ -1,23 +1,13 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "./scripts/tep-codex-hook.py session-start"
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/tep-codex-hook.py user-prompt"
+            "command": "./scripts/tep-codex-hook.py user-prompt",
+            "timeout": 5
           }
         ]
       }
@@ -28,29 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/tep-codex-hook.py pre-bash"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "./scripts/tep-codex-hook.py post-bash"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "./scripts/tep-codex-hook.py stop"
+            "command": "./scripts/tep-codex-hook.py pre-bash",
+            "timeout": 5
           }
         ]
       }

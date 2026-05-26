@@ -4,24 +4,35 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trust-evidence-protocol"
-version = "0.7.7"
-description = "Local fact protocol core for agent-owned sealed reasoning ledgers."
+version = "0.12.14"
+description = "Fact protocol server and local agent memory tools."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = {file = "LICENSE"}
 dependencies = [
-  "cryptography>=42",
+  "mirage-ai==0.0.1",
+  "starlark-pyo3==2025.2.5",
 ]
 
 [project.optional-dependencies]
 dev = []
 
 [project.scripts]
-tep-http = "tep.http_server:main"
-tep-init = "tep.project_context:main"
-tep-migrate-short-ids = "tep.migrations:main"
-tep-mcp = "tep.mcp_stdio_server:main"
-tep-stdio = "tep.stdio_server:main"
+tep-server = "tep.server_http:main"
+tep-client = "tep.server_client:main"
+tep-capture-run = "tep.capture_run_cli:main"
+tep-hooks = "tep.install_cli:hooks_main"
+tep-skills = "tep.install_cli:skills_main"
+tep-server-mcp = "tep.server_mcp_stdio:main"
+tep-migrate-terminus = "tep.server_migrate_terminus:main"
+tep-migrate-ids = "tep.server_migrate_ids:main"
+tep-worker = "tep.server_worker:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+tep = ["defaults/algorithms/*.star", "ui/*.html", "ui/*.css", "ui/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

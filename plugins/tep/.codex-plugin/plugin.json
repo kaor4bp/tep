@@ -1,7 +1,7 @@
 {
   "name": "tep",
-  "version": "0.7.7",
-  "description": "Codex integration guidance for Trust Evidence Protocol local fact ledgers.",
+  "version": "0.12.14",
+  "description": "Codex integration guidance for the TEP fact-memory server.",
   "author": {
     "name": "TEP contributors",
     "url": "https://github.com/kaor4bp/tep"
@@ -20,20 +20,20 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Trust Evidence Protocol",
-    "shortDescription": "Use TEP fact storage, sources, probes, and sealed reasoning ledgers.",
-    "longDescription": "Guides Codex agents to use Trust Evidence Protocol as a local fact memory: capture inputs and command observations, ingest files as sources, maintain agent-owned sealed ledgers, run ACT-gated probes, and ask TEP for valid next operations instead of writing raw JSON.",
+    "shortDescription": "Use the TEP server for durable facts, compact briefings, and argument checks.",
+    "longDescription": "Guides Codex agents to use Trust Evidence Protocol as a server-backed fact memory: ingest user input and documents as sources, learn reusable CLM facts with quotes, retrieve compact fact cards by tag or query, relate facts, create aggregate facts, capture command runs, and check reasoning chains before finalizing.",
     "developerName": "TEP contributors",
     "category": "Productivity",
     "capabilities": [
-      "Local tools",
+      "Local server",
       "Fact memory",
-      "Reasoning ledger"
+      "Reasoning checks"
     ],
     "websiteURL": "https://github.com/kaor4bp/tep",
     "defaultPrompt": [
-      "Start a TEP-backed agent session for this workspace.",
-      "Capture this document as a TEP source and extract supported claims.",
-      "Validate the current TEP ledger before finalizing the task."
+      "Start a TEP session and brief me on the relevant facts for this task.",
+      "Ingest this input as a TEP source and extract quote-backed CLM facts.",
+      "Check this reasoning chain against TEP facts before finalizing."
     ],
     "brandColor": "#2563EB"
   }
